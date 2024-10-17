@@ -1,0 +1,20 @@
+{
+  "name": "playground",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.7.36",
+    "swc-plugin-palta": "file:../packages/swc-plugin-palta",
+    "typescript": "^5.5.3",
+    "vite": "^5.4.8"
+  },
+  "dependencies": {
+    "palta": "file:../packages/palta"
+  }
+}

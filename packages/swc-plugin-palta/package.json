@@ -1,0 +1,17 @@
+{
+  "name": "swc-plugin-palta",
+  "version": "0.1.0",
+  "description": "",
+  "author": "",
+  "license": "ISC",
+  "keywords": [
+    "swc-plugin"
+  ],
+  "main": "target/wasm32-wasi/release/swc_plugin_palta.wasm",
+  "scripts": {
+    "build": "cargo build --target wasm32-wasi",
+    "release": "cargo build --target wasm32-wasi --release"
+  },
+  "files": [],
+  "preferUnplugged": true
+}

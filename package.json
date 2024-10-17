@@ -1,0 +1,9 @@
+{
+  "name": "palta.js",
+  "version": "0.0.1",
+  "workspaces": [
+    "packages/palta",
+    "packages/vite-plugin-palta",
+    "packages/swc-plugin-palta"
+  ]
+}
