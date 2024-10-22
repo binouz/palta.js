@@ -1,14 +1,14 @@
-import Palta from "palta";
+import Palta, { $state } from "palta";
 
 // @Palta.component
 const App = () => {
-  let { count } = Palta.state({ count: 0 });
+  const [count, setCount] = $state(0);
 
   return (
     <div>
       <h1>Hello, world!</h1>
       <p>Count: {count}</p>
-      <button onClick={() => count++}>Increment</button>
+      <button onClick={() => setCount((prev) => ++prev)}>Increment</button>
     </div>
   );
 };

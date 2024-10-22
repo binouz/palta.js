@@ -2,6 +2,8 @@ mod generators;
 mod processor;
 mod utils;
 
+use std::ops::Deref;
+
 use generators::ComponentDeclaration;
 use swc_core::common::comments::CommentKind;
 use swc_core::common::comments::Comments;
@@ -25,6 +27,7 @@ use generators::generate_component_declaration;
 pub struct TransformVisitor {
     comments: Option<Box<dyn Comments>>,
     has_component: bool,
+    has_palta_import: bool,
 }
 
 impl TransformVisitor {
@@ -72,10 +75,22 @@ impl VisitMut for TransformVisitor {
         }
     }
 
+    fn visit_mut_import_decl(&mut self, node: &mut ImportDecl) {
+        if node.src.deref().value == "palta" {
+            self.has_palta_import = self.has_palta_import
+                && node
+                    .specifiers
+                    .iter()
+                    .any(|specifier| matches!(specifier.clone(), ImportSpecifier::Default(_)));
+        }
+
+        node.visit_mut_children_with(self);
+    }
+
     fn visit_mut_module(&mut self, node: &mut swc_core::ecma::ast::Module) {
         node.visit_mut_children_with(self);
 
-        if !self.has_component {
+        if !self.has_component || self.has_palta_import {
             return;
         }
 
@@ -108,6 +123,7 @@ pub fn process_transform(program: Program, metadata: TransformPluginProgramMetad
             None => None,
         },
         has_component: false,
+        has_palta_import: false,
     }))
 }
 
@@ -138,6 +154,7 @@ mod tests {
                 as_folder(TransformVisitor {
                     comments: Some(Box::new(t.comments.clone())),
                     has_component: false,
+                    has_palta_import: false,
                 })
             },
             &input,
@@ -161,6 +178,7 @@ mod tests {
                 as_folder(TransformVisitor {
                     comments: Some(Box::new(t.comments.clone())),
                     has_component: false,
+                    has_palta_import: false,
                 })
             },
             &input,
