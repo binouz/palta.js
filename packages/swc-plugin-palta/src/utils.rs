@@ -1,6 +1,12 @@
+use std::ops::Deref;
+
 use swc_core::atoms::Atom;
+use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
-    Expr, JSXExpr, JSXMemberExpr, JSXObject, Lit, MemberExpr, MemberProp, Str,
+    ArrayLit, AssignExpr, AssignOp, AssignTarget, AssignTargetPat, Expr, ExprOrSpread, Ident,
+    IdentName, Invalid, JSXExpr, JSXMemberExpr, JSXObject, KeyValueProp, Lit, MemberExpr,
+    MemberProp, ObjectLit, ObjectPatProp, Pat, Prop, PropName, PropOrSpread, SimpleAssignTarget,
+    SpreadElement, Str,
 };
 
 pub fn jsx_expr_to_expr(expression: &JSXExpr) -> Expr {
@@ -24,5 +30,76 @@ pub fn jsx_member_expr_to_member_expr(member_expression: &JSXMemberExpr) -> Memb
         },
         prop: MemberProp::Ident(member_expression.prop.clone()),
         ..MemberExpr::default()
+    }
+}
+
+pub fn pat_to_expr(pat: &Pat) -> Expr {
+    match pat {
+        Pat::Ident(binding_ident) => Expr::Ident(binding_ident.id.clone()),
+        Pat::Array(array_pat) => Expr::Array(ArrayLit {
+            elems: array_pat
+                .elems
+                .iter()
+                .map(|elem| {
+                    elem.as_ref().map(|pat| ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(pat_to_expr(pat)),
+                    })
+                })
+                .collect(),
+            ..ArrayLit::default()
+        }),
+        Pat::Object(object_pat) => Expr::Object(ObjectLit {
+            props: object_pat
+                .props
+                .iter()
+                .map(|prop| match prop {
+                    ObjectPatProp::Rest(rest) => PropOrSpread::Spread(SpreadElement {
+                        dot3_token: DUMMY_SP,
+                        expr: Box::new(pat_to_expr(&rest.arg.clone())),
+                    }),
+                    ObjectPatProp::KeyValue(key_value) => {
+                        PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                            key: key_value.key.clone(),
+                            value: Box::new(pat_to_expr(&key_value.value.clone())),
+                        })))
+                    }
+                    ObjectPatProp::Assign(assign_pat) => {
+                        PropOrSpread::Prop(Box::new(match assign_pat.value.clone() {
+                            Some(expr) => Prop::KeyValue(KeyValueProp {
+                                key: PropName::Ident(IdentName {
+                                    span: DUMMY_SP,
+                                    sym: assign_pat.key.id.sym.clone(),
+                                }),
+                                value: expr,
+                            }),
+                            None => Prop::Shorthand(Ident {
+                                sym: assign_pat.key.id.sym.clone(),
+                                ..Ident::default()
+                            }),
+                        }))
+                    }
+                })
+                .collect(),
+            ..ObjectLit::default()
+        }),
+        Pat::Assign(assign_pat) => Expr::Assign(AssignExpr {
+            span: DUMMY_SP,
+            op: AssignOp::Assign,
+            left: match assign_pat.left.deref() {
+                Pat::Ident(ident) => AssignTarget::Simple(SimpleAssignTarget::Ident(ident.clone())),
+                Pat::Array(array_pat) => {
+                    AssignTarget::Pat(AssignTargetPat::Array(array_pat.clone()))
+                }
+                Pat::Object(object_pat) => {
+                    AssignTarget::Pat(AssignTargetPat::Object(object_pat.clone()))
+                }
+                _ => AssignTarget::Simple(SimpleAssignTarget::Invalid(Invalid { span: DUMMY_SP })),
+            },
+            right: Box::new(assign_pat.right.deref().clone()),
+        }),
+        Pat::Invalid(invalid) => Expr::Invalid(*invalid),
+        Pat::Expr(expr) => *expr.clone(),
+        _ => Expr::Invalid(Invalid { span: DUMMY_SP }),
     }
 }

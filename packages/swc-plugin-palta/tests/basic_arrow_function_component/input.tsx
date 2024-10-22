@@ -1,5 +1,3 @@
-import Palta from "palta";
-
 // @Palta.component
 const Component = ({ name }: { name: string }) => {
   return (

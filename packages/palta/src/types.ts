@@ -25,11 +25,6 @@ export interface PaltaChildrenElement extends PaltaElement {
   setValue: (value: PaltaNode[]) => void;
 };
 
-export interface PaltaFragmentElement extends PaltaElement {
-  [PaltaElementSymbol]: "fragment";
-  updateChild: (index: number, value: () => any) => void;
-};
-
 export type PaltaComponent<P = {}> = (props: P) => PaltaElement;
 
 export type PaltaNode =

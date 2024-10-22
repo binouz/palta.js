@@ -2,9 +2,9 @@ use core::panic;
 use std::ops::Deref;
 
 use swc_core::ecma::ast::{
-    ArrowExpr, BlockStmt, BlockStmtOrExpr, Expr, Function, Ident, JSXElement, JSXElementChild,
-    JSXElementName, JSXExprContainer, JSXFragment, JSXText, MemberExpr, ParenExpr, ReturnStmt,
-    Stmt,
+    ArrowExpr, BlockStmt, BlockStmtOrExpr, CallExpr, Callee, Decl, Expr, Function, Ident,
+    JSXElement, JSXElementChild, JSXElementName, JSXExprContainer, JSXFragment, JSXText,
+    MemberExpr, ParenExpr, Pat, ReturnStmt, Stmt, TsTypeAnn, VarDeclarator,
 };
 
 use crate::generators::{generate_element_set_children_call, generate_expression_function};
@@ -216,22 +216,25 @@ pub struct ComponentElementDescriptor {
 }
 
 #[derive(Debug)]
-pub struct FragmentElementDescriptor {
-    pub children: Vec<ElementChildren>,
-}
-
-#[derive(Debug)]
 pub enum ElementDescriptor {
     Tag(TagElementDescriptor),
     Component(ComponentElementDescriptor),
-    Fragment(FragmentElementDescriptor),
     Children,
+}
+
+pub struct StateDescriptor {
+    pub variable_name: Ident,
+    pub updater_name: Option<Ident>,
+    pub initial_value: Option<Expr>,
+    pub type_ann: Option<Box<TsTypeAnn>>,
 }
 
 pub struct Processor {
     elements: Vec<ElementDescriptor>,
+    children_element: Option<usize>,
     update_statements: Vec<Stmt>,
     root_element: Option<usize>,
+    states: Vec<StateDescriptor>,
 }
 
 fn get_element_descriptor(element_name: &JSXElementName) -> ElementDescriptor {
@@ -261,12 +264,24 @@ fn get_element_descriptor(element_name: &JSXElementName) -> ElementDescriptor {
     }
 }
 
+fn is_palta_state_call(call_expression: &CallExpr) -> bool {
+    if let Callee::Expr(callee) = &call_expression.callee {
+        if let Expr::Ident(ident) = callee.deref() {
+            return ident.sym == "$state";
+        }
+    }
+
+    false
+}
+
 impl Processor {
     pub fn new() -> Self {
         Processor {
             elements: vec![],
+            children_element: None,
             update_statements: vec![],
             root_element: None,
+            states: vec![],
         }
     }
 
@@ -278,8 +293,16 @@ impl Processor {
         &self.elements
     }
 
+    pub fn get_children_element(&self) -> Option<usize> {
+        self.children_element
+    }
+
     pub fn get_update_statements(&self) -> &Vec<Stmt> {
         &self.update_statements
+    }
+
+    pub fn get_states(&self) -> &Vec<StateDescriptor> {
+        &self.states
     }
 
     pub fn process_function(&mut self, node: &Function) {
@@ -319,7 +342,9 @@ impl Processor {
                 Stmt::Return(stmt) => {
                     self.process_return_statement(stmt);
                 }
-                Stmt::Decl(_) => {}
+                Stmt::Decl(decl) => {
+                    self.processs_declaration(decl);
+                }
                 Stmt::If(_) => {}
                 stmt => {
                     self.update_statements.push(stmt.clone());
@@ -369,11 +394,75 @@ impl Processor {
         }
     }
 
-    fn process_jsx_element(&mut self, element: &JSXElement) -> Vec<ElementChildren> {
-        self.elements
-            .push(get_element_descriptor(&element.opening.name));
-        let position = self.elements.len() - 1;
+    fn processs_declaration(&mut self, decl: &Decl) {
+        match decl {
+            Decl::Var(var_decl) => {
+                for decl in &var_decl.decls {
+                    self.process_var_declarator(decl);
+                }
+            }
+            Decl::Fn(_) => {}
+            _ => {}
+        }
+    }
 
+    fn process_var_declarator(&mut self, decl: &VarDeclarator) {
+        if decl.init.is_none() {
+            return;
+        }
+
+        if let Expr::Call(call_expression) = decl.init.as_ref().unwrap().deref() {
+            if is_palta_state_call(&call_expression.clone()) {
+                self.process_palta_state_declaration(&decl.name, call_expression);
+            }
+        }
+    }
+
+    fn process_palta_state_declaration(&mut self, name: &Pat, call_expression: &CallExpr) {
+        if let Pat::Array(array) = name {
+            if (array.elems.len() != 1 && array.elems.len() != 2) || array.elems[0].is_none() {
+                panic!("Palta state declaration should have one or two elements");
+            }
+
+            self.states.push(StateDescriptor {
+                variable_name: match array.elems[0].clone().unwrap() {
+                    Pat::Ident(ident) => ident.id,
+                    _ => panic!("First element of Palta state declaration should be an identifier"),
+                },
+                updater_name: array.elems[1].clone().map(|pat| match pat {
+                    Pat::Ident(ident) => ident.id,
+                    _ => {
+                        panic!("Second element of Palta state declaration should be an identifier")
+                    }
+                }),
+                initial_value: if call_expression.args.is_empty() {
+                    None
+                } else {
+                    Some(call_expression.args[0].expr.deref().clone())
+                },
+                type_ann: if let Pat::Ident(ident) = array.elems[0].clone().unwrap() {
+                    ident.type_ann.clone()
+                } else {
+                    None
+                },
+            });
+        } else {
+            panic!("Palta state declaration should be an array pattern");
+        }
+    }
+
+    fn process_jsx_element(&mut self, element: &JSXElement) -> Vec<ElementChildren> {
+        let element_descriptor = get_element_descriptor(&element.opening.name);
+
+        if let ElementDescriptor::Children = element_descriptor {
+            if self.children_element.is_some() {
+                return vec![ElementChildren::Element(self.children_element.unwrap())];
+            }
+        }
+
+        self.elements.push(element_descriptor);
+
+        let position = self.elements.len() - 1;
         let children = self.process_jsx_children(&element.children, Some(position));
 
         match self.elements[position] {
@@ -383,11 +472,8 @@ impl Processor {
             ElementDescriptor::Component(ref mut component) => {
                 component.children = children;
             }
-            ElementDescriptor::Fragment(ref mut fragment) => {
-                fragment.children = children;
-            }
             ElementDescriptor::Children => {
-                panic!("Children element should not have children");
+                self.children_element = Some(position);
             }
         };
 

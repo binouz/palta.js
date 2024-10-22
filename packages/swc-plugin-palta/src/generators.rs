@@ -1,18 +1,19 @@
 use swc_core::atoms::Atom;
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
-    ArrayLit, ArrowExpr, BindingIdent, BlockStmt, BlockStmtOrExpr, CallExpr, Callee, Decl, Expr,
-    ExprOrSpread, ExprStmt, Function, Ident, IdentName, JSXExpr, KeyValueProp, Lit, MemberExpr,
-    MemberProp, Null, Number, ObjectLit, ObjectPat, ParenExpr, Pat, Prop, PropName, PropOrSpread,
-    ReturnStmt, Stmt, Str, TsEntityName, TsQualifiedName, TsType, TsTypeAnn,
-    TsTypeParamInstantiation, TsTypeRef, VarDecl, VarDeclKind, VarDeclarator,
+    ArrayLit, ArrowExpr, AssignExpr, AssignOp, AssignTarget, BinExpr, BinaryOp, BindingIdent,
+    BlockStmt, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Decl, EmptyStmt, Expr, ExprOrSpread,
+    ExprStmt, Function, Ident, IdentName, JSXExpr, KeyValueProp, Lit, MemberExpr, MemberProp, Null,
+    Number, ObjectLit, ObjectPat, ParenExpr, Pat, Prop, PropName, PropOrSpread, ReturnStmt,
+    SimpleAssignTarget, Stmt, Str, TsEntityName, TsQualifiedName, TsType, TsTypeAnn,
+    TsTypeParamInstantiation, TsTypeRef, UnaryExpr, UnaryOp, VarDecl, VarDeclKind, VarDeclarator,
 };
 
 use crate::processor::{
-    ComponentElementDescriptor, ComponentName, ElementChildren, ElementDescriptor,
-    FragmentElementDescriptor, Processor, TagElementDescriptor,
+    ComponentElementDescriptor, ComponentName, ElementChildren, ElementDescriptor, Processor,
+    StateDescriptor, TagElementDescriptor,
 };
-use crate::utils::jsx_expr_to_expr;
+use crate::utils::{jsx_expr_to_expr, pat_to_expr};
 
 pub enum ComponentDeclaration<'a> {
     Function(&'a mut Function),
@@ -38,7 +39,7 @@ fn generate_children_array(children: &[ElementChildren]) -> ExprOrSpread {
                         ElementChildren::Element(index) => ExprOrSpread {
                             spread: None,
                             expr: Box::new(Expr::Ident(Ident {
-                                sym: format!("element${}", index).into(),
+                                sym: format!("__$element${}", index).into(),
                                 ..Ident::default()
                             })),
                         },
@@ -109,24 +110,6 @@ fn generate_palta_component_call(element: &ComponentElementDescriptor) -> Option
     })))
 }
 
-fn generate_palta_fragment_call(element: &FragmentElementDescriptor) -> Option<Box<Expr>> {
-    Some(Box::new(Expr::Call(CallExpr {
-        callee: Callee::Expr(Box::new(Expr::Member(MemberExpr {
-            obj: Box::new(Expr::Ident(Ident {
-                sym: "Palta".into(),
-                ..Ident::default()
-            })),
-            prop: MemberProp::Ident(IdentName {
-                sym: "createFragment".into(),
-                ..IdentName::default()
-            }),
-            ..MemberExpr::default()
-        }))),
-        args: vec![generate_children_array(&element.children)],
-        ..CallExpr::default()
-    })))
-}
-
 fn generate_palta_children_call() -> Option<Box<Expr>> {
     Some(Box::new(Expr::Call(CallExpr {
         callee: Callee::Expr(Box::new(Expr::Member(MemberExpr {
@@ -149,25 +132,106 @@ fn generate_element_creation_call(element: &ElementDescriptor) -> Option<Box<Exp
     match element {
         ElementDescriptor::Tag(tag) => generate_palta_element_call(tag),
         ElementDescriptor::Component(component) => generate_palta_component_call(component),
-        ElementDescriptor::Fragment(fragment) => generate_palta_fragment_call(fragment),
         ElementDescriptor::Children => generate_palta_children_call(),
     }
 }
 
-fn generate_component_update_function(processor: &Processor, props: Pat) -> Box<Expr> {
-    match processor.get_update_statements().len() {
-        0 => Box::new(Expr::Ident(Ident {
-            sym: "undefined".into(),
-            ..Ident::default()
-        })),
-        _ => Box::new(Expr::Arrow(ArrowExpr {
-            body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
-                stmts: processor.get_update_statements().clone(),
-                ..BlockStmt::default()
+fn generate_props_variable_declaration(props: Pat) -> Stmt {
+    Stmt::Decl(Decl::Var(Box::new(VarDecl {
+        kind: VarDeclKind::Let,
+        decls: vec![VarDeclarator {
+            span: DUMMY_SP,
+            name: Pat::Ident(BindingIdent {
+                id: Ident {
+                    sym: "__$props".into(),
+                    ..Ident::default()
+                },
+                type_ann: match props {
+                    Pat::Ident(ident) => ident.type_ann.map(|_| {
+                        Box::new(TsTypeAnn {
+                            span: DUMMY_SP,
+                            type_ann: Box::new(TsType::TsTypeRef(TsTypeRef {
+                                span: DUMMY_SP,
+                                type_name: TsEntityName::Ident(Ident {
+                                    sym: "any".into(),
+                                    ..Ident::default()
+                                }),
+                                type_params: None,
+                            })),
+                        })
+                    }),
+                    Pat::Object(object) => object.type_ann.map(|_| {
+                        Box::new(TsTypeAnn {
+                            span: DUMMY_SP,
+                            type_ann: Box::new(TsType::TsTypeRef(TsTypeRef {
+                                span: DUMMY_SP,
+                                type_name: TsEntityName::Ident(Ident {
+                                    sym: "any".into(),
+                                    ..Ident::default()
+                                }),
+                                type_params: None,
+                            })),
+                        })
+                    }),
+                    _ => None,
+                },
+            }),
+            init: Some(Box::new(Expr::Object({
+                ObjectLit {
+                    props: vec![],
+                    span: DUMMY_SP,
+                }
+            }))),
+            definite: false,
+        }],
+        ..VarDecl::default()
+    })))
+}
+
+fn generate_component_update_function(processor: &Processor, props: Pat) -> Stmt {
+    let mut stmts = vec![Stmt::Expr(ExprStmt {
+        expr: Box::new(Expr::Assign(AssignExpr {
+            op: AssignOp::Assign,
+            left: AssignTarget::Simple(SimpleAssignTarget::Ident(BindingIdent {
+                id: Ident {
+                    sym: "__$props".into(),
+                    ..Ident::default()
+                },
+                type_ann: None,
             })),
-            params: vec![props],
-            ..ArrowExpr::default()
+            right: Box::new(pat_to_expr(&props.clone())),
+            ..AssignExpr::default()
         })),
+        ..ExprStmt::default()
+    })];
+
+    stmts.append(&mut processor.get_update_statements().clone());
+
+    match processor.get_update_statements().len() {
+        0 => Stmt::Empty(EmptyStmt { span: DUMMY_SP }),
+        _ => Stmt::Decl(Decl::Var(Box::new(VarDecl {
+            kind: VarDeclKind::Const,
+            decls: vec![VarDeclarator {
+                span: DUMMY_SP,
+                name: Pat::Ident(BindingIdent {
+                    id: Ident {
+                        sym: "__$update".into(),
+                        ..Ident::default()
+                    },
+                    ..BindingIdent::default()
+                }),
+                init: Some(Box::new(Expr::Arrow(ArrowExpr {
+                    body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+                        stmts,
+                        ..BlockStmt::default()
+                    })),
+                    params: vec![props],
+                    ..ArrowExpr::default()
+                }))),
+                definite: false,
+            }],
+            ..VarDecl::default()
+        }))),
     }
 }
 
@@ -178,7 +242,7 @@ fn generate_element_declaration(index: usize, element: &ElementDescriptor) -> St
             span: DUMMY_SP,
             name: Pat::Ident(BindingIdent {
                 id: Ident {
-                    sym: format!("element${}", index).into(),
+                    sym: format!("__$element${}", index).into(),
                     ..Ident::default()
                 },
                 ..BindingIdent::default()
@@ -197,14 +261,14 @@ fn generate_root_declaration_statement(processor: &Processor) -> Stmt {
             span: DUMMY_SP,
             name: Pat::Ident(BindingIdent {
                 id: Ident {
-                    sym: "root".into(),
+                    sym: "__$root".into(),
                     ..Ident::default()
                 },
                 ..BindingIdent::default()
             }),
             init: Some(Box::new(match processor.get_root_element() {
                 Some(position) => Expr::Ident(Ident {
-                    sym: format!("element${}", position).into(),
+                    sym: format!("__$element${}", position).into(),
                     ..Ident::default()
                 }),
                 None => Expr::Lit(Lit::Null(Null { span: DUMMY_SP })),
@@ -215,39 +279,32 @@ fn generate_root_declaration_statement(processor: &Processor) -> Stmt {
     })))
 }
 
-fn generate_component_return_statement(processor: &Processor, props: Pat) -> Stmt {
+fn generate_component_return_statement(processor: &Processor) -> Stmt {
     Stmt::Return(ReturnStmt {
         arg: Some(Box::new(Expr::Object(ObjectLit {
             props: vec![
                 PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
                     key: PropName::Ident(IdentName {
-                        sym: "elements".into(),
+                        sym: "childrenElement".into(),
                         ..IdentName::default()
                     }),
-                    value: Box::new(Expr::Array(ArrayLit {
-                        elems: processor
-                            .get_elements()
-                            .iter()
-                            .enumerate()
-                            .map(|(i, _)| {
-                                Some(ExprOrSpread {
-                                    spread: None,
-                                    expr: Box::new(Expr::Ident(Ident {
-                                        sym: format!("element${}", i).into(),
-                                        ..Ident::default()
-                                    })),
-                                })
-                            })
-                            .collect::<Vec<Option<ExprOrSpread>>>(),
-                        ..ArrayLit::default()
-                    })),
+                    value: Box::new(match processor.get_children_element() {
+                        Some(pos) => Expr::Ident(Ident {
+                            sym: format!("__$element${}", pos).into(),
+                            ..Ident::default()
+                        }),
+                        _ => Expr::Lit(Lit::Null(Null { span: DUMMY_SP })),
+                    }),
                 }))),
                 PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
                     key: PropName::Ident(IdentName {
                         sym: "update".into(),
                         ..IdentName::default()
                     }),
-                    value: generate_component_update_function(processor, props),
+                    value: Box::new(Expr::Ident(Ident {
+                        sym: "__$update".into(),
+                        ..Ident::default()
+                    })),
                 }))),
                 PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
                     key: PropName::Ident(IdentName {
@@ -257,7 +314,7 @@ fn generate_component_return_statement(processor: &Processor, props: Pat) -> Stm
                     value: Box::new(Expr::Arrow(ArrowExpr {
                         body: Box::new(BlockStmtOrExpr::Expr(Box::new(Expr::Paren(ParenExpr {
                             expr: Box::new(Expr::Ident(Ident {
-                                sym: "root".into(),
+                                sym: "__$root".into(),
                                 ..Ident::default()
                             })),
                             ..ParenExpr::default()
@@ -273,7 +330,196 @@ fn generate_component_return_statement(processor: &Processor, props: Pat) -> Stm
     })
 }
 
-fn generate_component_statements(processor: &Processor, props: Pat) -> Vec<Stmt> {
+/*
+const setName: Palta.StateUpdater<string> = (value) => {
+    name = typeof value === 'function' ? value(name) : value;
+    Palta.componentUpdate(() => __$update(__$props));
+};
+*/
+
+fn generate_state_updater_function(state_variable_name: &Ident) -> Expr {
+    Expr::Arrow(ArrowExpr {
+        params: vec![Pat::Ident(BindingIdent {
+            id: Ident {
+                sym: "value".into(),
+                ..Ident::default()
+            },
+            ..BindingIdent::default()
+        })],
+        body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+            stmts: vec![
+                Stmt::Expr(ExprStmt {
+                    expr: Box::new(Expr::Assign(AssignExpr {
+                        op: AssignOp::Assign,
+                        left: AssignTarget::Simple(SimpleAssignTarget::Ident(BindingIdent {
+                            id: state_variable_name.clone(),
+                            ..BindingIdent::default()
+                        })),
+                        right: Box::new(Expr::Cond(CondExpr {
+                            test: Box::new(Expr::Bin(BinExpr {
+                                op: BinaryOp::EqEqEq,
+                                left: Box::new(Expr::Unary(UnaryExpr {
+                                    op: UnaryOp::TypeOf,
+                                    arg: Box::new(Expr::Ident(Ident {
+                                        sym: "value".into(),
+                                        ..Ident::default()
+                                    })),
+                                    ..UnaryExpr::default()
+                                })),
+                                right: Box::new(Expr::Lit(Lit::Str(Str {
+                                    span: DUMMY_SP,
+                                    value: "function".into(),
+                                    raw: None,
+                                }))),
+                                ..BinExpr::default()
+                            })),
+                            cons: Box::new(Expr::Call(CallExpr {
+                                callee: Callee::Expr(Box::new(Expr::Ident(Ident {
+                                    sym: "value".into(),
+                                    ..Ident::default()
+                                }))),
+                                args: vec![ExprOrSpread {
+                                    spread: None,
+                                    expr: Box::new(Expr::Ident(state_variable_name.clone())),
+                                }],
+                                ..CallExpr::default()
+                            })),
+                            alt: Box::new(Expr::Ident(Ident {
+                                sym: "value".into(),
+                                ..Ident::default()
+                            })),
+                            ..CondExpr::default()
+                        })),
+                        ..AssignExpr::default()
+                    })),
+                    ..ExprStmt::default()
+                }),
+                Stmt::Expr(ExprStmt {
+                    expr: Box::new(Expr::Call(CallExpr {
+                        callee: Callee::Expr(Box::new(Expr::Member(MemberExpr {
+                            obj: Box::new(Expr::Ident(Ident {
+                                sym: "Palta".into(),
+                                ..Ident::default()
+                            })),
+                            prop: MemberProp::Ident(IdentName {
+                                sym: "componentUpdate".into(),
+                                ..IdentName::default()
+                            }),
+                            ..MemberExpr::default()
+                        }))),
+                        args: vec![ExprOrSpread {
+                            spread: None,
+                            expr: Box::new(Expr::Arrow(ArrowExpr {
+                                params: vec![],
+                                body: Box::new(BlockStmtOrExpr::Expr(Box::new(Expr::Call(
+                                    CallExpr {
+                                        callee: Callee::Expr(Box::new(Expr::Ident(Ident {
+                                            sym: "__$update".into(),
+                                            ..Ident::default()
+                                        }))),
+                                        args: vec![ExprOrSpread {
+                                            spread: None,
+                                            expr: Box::new(Expr::Ident(Ident {
+                                                sym: "__$props".into(),
+                                                ..Ident::default()
+                                            })),
+                                        }],
+                                        ..CallExpr::default()
+                                    },
+                                )))),
+                                ..ArrowExpr::default()
+                            })),
+                        }],
+                        ..CallExpr::default()
+                    })),
+                    ..ExprStmt::default()
+                }),
+            ],
+            ..BlockStmt::default()
+        })),
+        ..ArrowExpr::default()
+    })
+}
+
+fn generate_state_statements(
+    statements: &mut Vec<Stmt>,
+    state: &StateDescriptor,
+    is_typescript: bool,
+) {
+    statements.push(Stmt::Decl(Decl::Var(Box::new(VarDecl {
+        kind: VarDeclKind::Let,
+        decls: vec![VarDeclarator {
+            span: DUMMY_SP,
+            name: Pat::Ident(BindingIdent {
+                id: state.variable_name.clone(),
+                ..BindingIdent::default()
+            }),
+            init: state.initial_value.clone().map(Box::new),
+            definite: false,
+        }],
+        ..VarDecl::default()
+    }))));
+
+    if let Some(updater_name) = &state.updater_name {
+        statements.push(Stmt::Decl(Decl::Var(Box::new(VarDecl {
+            kind: VarDeclKind::Const,
+            decls: vec![VarDeclarator {
+                span: DUMMY_SP,
+                name: Pat::Ident(BindingIdent {
+                    id: updater_name.clone(),
+                    type_ann: if is_typescript {
+                        Some(Box::new(TsTypeAnn {
+                            span: DUMMY_SP,
+                            type_ann: Box::new(TsType::TsTypeRef(TsTypeRef {
+                                span: DUMMY_SP,
+                                type_name: TsEntityName::TsQualifiedName(Box::new(
+                                    TsQualifiedName {
+                                        span: DUMMY_SP,
+                                        left: TsEntityName::Ident(Ident {
+                                            sym: "Palta".into(),
+                                            ..Ident::default()
+                                        }),
+                                        right: IdentName {
+                                            sym: "StateUpdater".into(),
+                                            ..IdentName::default()
+                                        },
+                                    },
+                                )),
+                                type_params: Some(Box::new(TsTypeParamInstantiation {
+                                    span: DUMMY_SP,
+                                    params: vec![match state.type_ann.clone() {
+                                        Some(type_ann) => type_ann.type_ann.clone(),
+                                        None => Box::new(TsType::TsTypeRef(TsTypeRef {
+                                            span: DUMMY_SP,
+                                            type_name: TsEntityName::Ident(Ident {
+                                                sym: "any".into(),
+                                                ..Ident::default()
+                                            }),
+                                            type_params: None,
+                                        })),
+                                    }],
+                                })),
+                            })),
+                        }))
+                    } else {
+                        None
+                    },
+                }),
+                init: Some(Box::new(generate_state_updater_function(
+                    &state.variable_name,
+                ))),
+                definite: false,
+            }],
+            ..VarDecl::default()
+        }))))
+    }
+}
+
+fn generate_component_statements(
+    processor: &Processor,
+    props: Pat,
+    is_typescript: bool,
+) -> Vec<Stmt> {
     let mut statements = vec![];
 
     for (index, element) in processor.get_elements().iter().enumerate() {
@@ -282,8 +528,15 @@ fn generate_component_statements(processor: &Processor, props: Pat) -> Vec<Stmt>
 
     statements.reverse();
 
+    statements.push(generate_props_variable_declaration(props.clone()));
+
+    for state in processor.get_states() {
+        generate_state_statements(&mut statements, state, is_typescript);
+    }
+
+    statements.push(generate_component_update_function(processor, props.clone()));
     statements.push(generate_root_declaration_statement(processor));
-    statements.push(generate_component_return_statement(processor, props));
+    statements.push(generate_component_return_statement(processor));
 
     statements
 }
@@ -306,7 +559,11 @@ fn generate_function_component_declaration(function: &mut Function) {
     processor.process_function(function);
 
     function.body = Some(BlockStmt {
-        stmts: generate_component_statements(&processor, props.clone()),
+        stmts: generate_component_statements(
+            &processor,
+            props.clone(),
+            props_type_annotation.is_some(),
+        ),
         ..BlockStmt::default()
     });
     function.params = vec![];
@@ -322,7 +579,7 @@ fn generate_function_component_declaration(function: &mut Function) {
                         ..Ident::default()
                     }),
                     right: IdentName {
-                        sym: "Component".into(),
+                        sym: "ComponentDefinition".into(),
                         ..IdentName::default()
                     },
                 })),
@@ -362,7 +619,11 @@ fn generate_arrow_function_component_declaration(var_decl: &mut VarDecl) {
             processor.process_arrow_expression(expression);
 
             expression.body = Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
-                stmts: generate_component_statements(&processor, props.clone()),
+                stmts: generate_component_statements(
+                    &processor,
+                    props.clone(),
+                    props_type_annotation.is_some(),
+                ),
                 ..BlockStmt::default()
             }));
             expression.params = vec![];
@@ -378,7 +639,7 @@ fn generate_arrow_function_component_declaration(var_decl: &mut VarDecl) {
                                 ..Ident::default()
                             }),
                             right: IdentName {
-                                sym: "Component".into(),
+                                sym: "ComponentDefinition".into(),
                                 ..IdentName::default()
                             },
                         })),
@@ -429,7 +690,7 @@ pub fn generate_element_set_children_call(
         expr: Box::new(Expr::Call(CallExpr {
             callee: Callee::Expr(Box::new(Expr::Member(MemberExpr {
                 obj: Box::new(Expr::Ident(Ident {
-                    sym: format!("element${}", element_position).into(),
+                    sym: format!("__$element${}", element_position).into(),
                     ..Ident::default()
                 })),
                 prop: MemberProp::Ident(IdentName {

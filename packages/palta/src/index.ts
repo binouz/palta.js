@@ -5,15 +5,16 @@ import {
   PaltaTagElement,
   PaltaComponentElement,
   PaltaChildrenElement,
-  PaltaFragmentElement,
 } from "./types";
 import { EVENT_NAME } from "./events";
 
-type PaltaComponent = () => {
-  elements: PaltaElement[];
-  update: (props: any) => void;
+type PaltaComponentDefinition<T = any> = {
+  childrenElement: PaltaChildrenElement | null;
+  update: (props: T) => void;
   getRoot: () => PaltaElement;
 };
+
+type PaltaComponent<T = any> = () => PaltaComponentDefinition<T>;
 
 type ElementTag = keyof JSX.IntrinsicElements;
 
@@ -29,7 +30,7 @@ const setHtmlElementProps = (element: HTMLElement, props: any) => {
       }
       continue;
     }
-    
+
     if (EVENT_NAME.includes(key as string)) {
       // TODO
       continue;
@@ -37,14 +38,13 @@ const setHtmlElementProps = (element: HTMLElement, props: any) => {
 
     element.setAttribute(key, value as string);
   }
-
 };
 
 const isPaltaElement = (node: PaltaNode): node is PaltaElement =>
   !!node && typeof node === "object" && PaltaElementSymbol in node;
 
-const isChildrenElement = (node: PaltaNode): node is PaltaChildrenElement =>
-  isPaltaElement(node) && node[PaltaElementSymbol] === "children";
+// const isChildrenElement = (node: PaltaNode): node is PaltaChildrenElement =>
+//   isPaltaElement(node) && node[PaltaElementSymbol] === "children";
 
 const isTagElement = (node: PaltaNode): node is PaltaTagElement =>
   isPaltaElement(node) && node[PaltaElementSymbol] === "tag";
@@ -52,13 +52,10 @@ const isTagElement = (node: PaltaNode): node is PaltaTagElement =>
 const isComponentElement = (node: PaltaNode): node is PaltaComponentElement =>
   isPaltaElement(node) && node[PaltaElementSymbol] === "component";
 
-const isFragmentElement = (node: PaltaNode): node is PaltaFragmentElement =>
-  isPaltaElement(node) && node[PaltaElementSymbol] === "fragment";
-
 const isElementWithChildren = (
   node: PaltaNode
-): node is PaltaTagElement | PaltaComponentElement | PaltaFragmentElement =>
-  isTagElement(node) || isComponentElement(node) || isFragmentElement(node);
+): node is PaltaTagElement | PaltaComponentElement =>
+  isTagElement(node) || isComponentElement(node);
 
 const isIterable = (value: PaltaNode): value is Iterable<PaltaNode> =>
   !!value && typeof value === "object" && Symbol.iterator in value;
@@ -99,19 +96,23 @@ const unmountChildren = (children: PaltaNode[]) => {
   }
 };
 
-const updateElementChild = (element: HTMLElement, index: number,child: PaltaNode) => {        
+const updateElementChild = (
+  element: HTMLElement,
+  index: number,
+  child: PaltaNode
+) => {
   if (isPaltaElement(child)) {
     child.mount(element, index);
     return;
   }
-  
+
   if (isIterable(child)) {
     mountChildren(element, Array.from(child), index);
     return;
   }
 
   const existingNode = element.childNodes[index];
-          
+
   if (child === undefined || child === null || child === false) {
     existingNode && element.removeChild(existingNode);
     return;
@@ -124,24 +125,23 @@ const updateElementChild = (element: HTMLElement, index: number,child: PaltaNode
   } else {
     element.appendChild(textNode);
   }
-}
+};
 
 namespace Palta {
   export type Element = PaltaElement;
   export type Node = PaltaNode;
-  export type Component = PaltaComponent;
+  export type ComponentDefinition<T = any> = PaltaComponentDefinition<T>;
+  export type Component<T = any> = PaltaComponent<T>;
 
   export const createComponent = (
     component: Component,
     children: Node[]
-  ): Node => {
-    const { elements, update, getRoot } = component();
+  ): PaltaComponentElement => {
+    const { childrenElement, update, getRoot } = component();
 
     return {
       [PaltaElementSymbol]: "component",
       mount: (parent, index) => {
-        const childrenElement = elements.find(isChildrenElement);
-
         if (childrenElement) {
           childrenElement.setValue(children);
         }
@@ -149,8 +149,6 @@ namespace Palta {
         getRoot().mount(parent, index);
       },
       unmount: () => {
-        const childrenElement = elements.find(isChildrenElement);
-
         if (childrenElement) {
           childrenElement.setValue([]);
         }
@@ -168,7 +166,10 @@ namespace Palta {
     } as PaltaComponentElement;
   };
 
-  export const createElement = (tag: ElementTag, children: Node[]): Node => {
+  export const createElement = (
+    tag: ElementTag,
+    children: Node[]
+  ): PaltaTagElement => {
     const element = document.createElement(tag);
 
     return {
@@ -195,11 +196,11 @@ namespace Palta {
       },
       updateChild: (index: number, value: () => PaltaNode) => {
         updateElementChild(element, index, value());
-      }
+      },
     } as PaltaTagElement;
   };
 
-  export const createChildren = (): Node => {
+  export const createChildren = (): PaltaChildrenElement => {
     let children: Node[] = [];
 
     return {
@@ -216,28 +217,6 @@ namespace Palta {
     } as PaltaChildrenElement;
   };
 
-  export const createFragment = (children: Node[]): Node => {
-    let parent: HTMLElement | null = null;
-
-    return {
-      [PaltaElementSymbol]: "fragment",
-      mount: (_parent, index) => {
-        parent = _parent;
-        mountChildren(parent, children, index);
-      },
-      unmount: () => {
-        unmountChildren(children);
-      },
-      updateChild: (index: number, value: () => PaltaNode) => {
-        if (!parent) {
-          return;
-        }
-
-        updateElementChild(parent, index, value());
-      },
-    } as PaltaFragmentElement;
-  };
-
   export const render = (selector: string, component: () => JSX.Element) => {
     const root = document.querySelector(selector);
 
@@ -245,15 +224,24 @@ namespace Palta {
       throw new Error(`Element with selector "${selector}" not found`);
     }
 
-    const instance = createComponent(component as unknown as Palta.Component, []) as PaltaComponentElement;
+    const instance = createComponent(
+      component as unknown as Palta.Component,
+      []
+    ) as PaltaComponentElement;
 
     instance.mount(root as HTMLElement, 0);
-  }
+  };
 
+  export const componentUpdate = (_: () => void) => {
+    // TODO
+  };
 }
 
 declare namespace Palta {
-  export const state: <S extends {}>(initialValue: S) => S;
+  export type StateUpdaterValue<T> = T | ((v: T) => T);
+  export type StateUpdater<T> = (value: StateUpdaterValue<T>) => void;
 }
 
 export default Palta;
+
+export declare const $state: <T = any>(value: T) => [T, Palta.StateUpdater<T>];

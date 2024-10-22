@@ -1,19 +1,21 @@
 import Palta from "palta";
 
-// @Palta.component
 function Component() {
-  const element$1 = Palta.createElement("h1", ["Hello, ", "", "!"]);
-  const element$0 = Palta.createElement("div", [element$1]);
-  let root = element$0;
+  const __$element$1 = Palta.createElement("h1", ["Hello, ", "", "!"]);
+  const __$element$0 = Palta.createElement("div", [__$element$1]);
+  let __$props = {};
+  const __$update = ({ name }) => {
+    __$props = { name };
+    __$element$1.updateChild(1, () => {
+      return name;
+    });
+  }
+  let __$root = __$element$0;
 
   return {
-    elements: [element$0, element$1],
-    update: ({ name }) => {
-      element$1.updateChild(1, () => {
-        return name;
-      });
-    },
-    getRoot: () => root,
+    childrenElement: null,
+    update: __$update,
+    getRoot: () => __$root,
   };
 }
 
