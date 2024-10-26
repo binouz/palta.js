@@ -681,7 +681,7 @@ pub fn generate_expression_function(expression: &JSXExpr) -> Box<Expr> {
     }))
 }
 
-pub fn generate_element_set_children_call(
+pub fn generate_element_update_child_call(
     element_position: usize,
     children_position: usize,
     expression: &Expr,
@@ -713,6 +713,30 @@ pub fn generate_element_set_children_call(
                     expr: Box::new(expression.clone()),
                 },
             ],
+            ..CallExpr::default()
+        })),
+        ..ExprStmt::default()
+    })
+}
+
+pub fn generate_element_update_props_call(element_position: usize, props: &ObjectLit) -> Stmt {
+    Stmt::Expr(ExprStmt {
+        expr: Box::new(Expr::Call(CallExpr {
+            callee: Callee::Expr(Box::new(Expr::Member(MemberExpr {
+                obj: Box::new(Expr::Ident(Ident {
+                    sym: format!("__$element${}", element_position).into(),
+                    ..Ident::default()
+                })),
+                prop: MemberProp::Ident(IdentName {
+                    sym: "updateProps".into(),
+                    ..IdentName::default()
+                }),
+                ..MemberExpr::default()
+            }))),
+            args: vec![ExprOrSpread {
+                spread: None,
+                expr: Box::new(Expr::Object(props.clone())),
+            }],
             ..CallExpr::default()
         })),
         ..ExprStmt::default()

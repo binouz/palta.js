@@ -1,0 +1,37 @@
+{
+  "name": "vite-plugin-palta",
+  "version": "1.0.0",
+  "description": "A custom Vite plugin for Palta",
+  "main": "dist/index.umd.js",
+  "module": "dist/index.es.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.es.mjs",
+      "require": "./dist/index.umd.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "/dist"
+  ],
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "keywords": [
+    "vite",
+    "plugin",
+    "palta"
+  ],
+  "author": "Aubin REBILLAT",
+  "license": "MIT",
+  "dependencies": {
+    "@swc/core": "^1.7.36",
+    "vite": "^5.4.8"
+  },
+  "peerDependencies": {
+    "@swc/core": "^1.7.36",
+    "vite": "^5.4.8"
+  }
+}

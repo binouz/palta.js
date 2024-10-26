@@ -1,14 +1,20 @@
 use core::panic;
 use std::ops::Deref;
 
+use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
-    ArrowExpr, BlockStmt, BlockStmtOrExpr, CallExpr, Callee, Decl, Expr, Function, Ident,
-    JSXElement, JSXElementChild, JSXElementName, JSXExprContainer, JSXFragment, JSXText,
-    MemberExpr, ParenExpr, Pat, ReturnStmt, Stmt, TsTypeAnn, VarDeclarator,
+    ArrowExpr, BlockStmt, BlockStmtOrExpr, Bool, CallExpr, Callee, Decl, Expr, Function, Ident,
+    JSXAttrName, JSXAttrOrSpread, JSXAttrValue, JSXElement, JSXElementChild, JSXElementName,
+    JSXExprContainer, JSXFragment, JSXOpeningElement, JSXText, KeyValueProp, Lit, MemberExpr,
+    ObjectLit, ParenExpr, Pat, Prop, PropName, PropOrSpread, ReturnStmt, Stmt, TsTypeAnn,
+    VarDeclarator,
 };
 
-use crate::generators::{generate_element_set_children_call, generate_expression_function};
-use crate::utils::jsx_member_expr_to_member_expr;
+use crate::generators::{
+    generate_element_update_child_call, generate_element_update_props_call,
+    generate_expression_function,
+};
+use crate::utils::{jsx_expr_to_expr, jsx_member_expr_to_member_expr};
 
 const HTML_ELEMENT_TAGS: &[&str] = &[
     "a",
@@ -207,12 +213,14 @@ pub enum ComponentName {
 pub struct TagElementDescriptor {
     pub tag: String,
     pub children: Vec<ElementChildren>,
+    pub props: Option<ObjectLit>,
 }
 
 #[derive(Debug)]
 pub struct ComponentElementDescriptor {
     pub component: ComponentName,
     pub children: Vec<ElementChildren>,
+    pub props: Option<ObjectLit>,
 }
 
 #[derive(Debug)]
@@ -237,25 +245,68 @@ pub struct Processor {
     states: Vec<StateDescriptor>,
 }
 
-fn get_element_descriptor(element_name: &JSXElementName) -> ElementDescriptor {
-    match element_name {
+fn get_element_props(element: &JSXOpeningElement) -> Option<ObjectLit> {
+    if element.attrs.is_empty() {
+        return None;
+    }
+
+    Some(ObjectLit {
+        span: element.span,
+        props: element
+            .attrs
+            .iter()
+            .map(|attr| match attr {
+                JSXAttrOrSpread::JSXAttr(attr) => {
+                    PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                        key: PropName::Ident(match &attr.name {
+                            JSXAttrName::Ident(ident) => ident.clone(),
+                            JSXAttrName::JSXNamespacedName(_) => {
+                                panic!("JSX Namespaced Name is not supported")
+                            }
+                        }),
+                        value: match attr.value.clone() {
+                            Some(value) => Box::new(match value {
+                                JSXAttrValue::Lit(lit) => Expr::Lit(lit.clone()),
+                                JSXAttrValue::JSXExprContainer(container) => {
+                                    jsx_expr_to_expr(&container.expr)
+                                }
+                                _ => panic!("JSX Attribute Value is not supported"), // TODO: SUpport jsxElement as prop
+                            }),
+                            None => Box::new(Expr::Lit(Lit::Bool(Bool {
+                                span: DUMMY_SP,
+                                value: true,
+                            }))),
+                        },
+                    })))
+                }
+                JSXAttrOrSpread::SpreadElement(spread) => PropOrSpread::Spread(spread.clone()),
+            })
+            .collect(),
+    })
+}
+
+fn get_element_descriptor(element: &JSXOpeningElement) -> ElementDescriptor {
+    match element.name.clone() {
         JSXElementName::Ident(ident) if ident.sym == "Children" => ElementDescriptor::Children,
         JSXElementName::Ident(ident) if HTML_ELEMENT_TAGS.contains(&ident.sym.as_str()) => {
             ElementDescriptor::Tag(TagElementDescriptor {
                 tag: ident.sym.as_str().to_string(),
                 children: vec![],
+                props: get_element_props(element),
             })
         }
         JSXElementName::Ident(ident) => ElementDescriptor::Component(ComponentElementDescriptor {
-            component: ComponentName::Identifier((*ident).clone()),
+            component: ComponentName::Identifier(ident.clone()),
             children: vec![],
+            props: get_element_props(element),
         }),
         JSXElementName::JSXMemberExpr(member_expression) => {
             ElementDescriptor::Component(ComponentElementDescriptor {
                 component: ComponentName::MemberExpression(jsx_member_expr_to_member_expr(
-                    member_expression,
+                    &member_expression,
                 )),
                 children: vec![],
+                props: get_element_props(element),
             })
         }
         JSXElementName::JSXNamespacedName(_) => {
@@ -452,7 +503,7 @@ impl Processor {
     }
 
     fn process_jsx_element(&mut self, element: &JSXElement) -> Vec<ElementChildren> {
-        let element_descriptor = get_element_descriptor(&element.opening.name);
+        let element_descriptor = get_element_descriptor(&element.opening);
 
         if let ElementDescriptor::Children = element_descriptor {
             if self.children_element.is_some() {
@@ -464,18 +515,22 @@ impl Processor {
 
         let position = self.elements.len() - 1;
         let children = self.process_jsx_children(&element.children, Some(position));
-
-        match self.elements[position] {
+        let props = match self.elements[position] {
             ElementDescriptor::Tag(ref mut tag) => {
                 tag.children = children;
+                tag.props.clone()
             }
             ElementDescriptor::Component(ref mut component) => {
                 component.children = children;
+                component.props.clone()
             }
             ElementDescriptor::Children => {
                 self.children_element = Some(position);
+                None
             }
         };
+
+        self.add_update_props_statement(position, &props);
 
         vec![ElementChildren::Element(position)]
     }
@@ -502,7 +557,7 @@ impl Processor {
     ) -> Vec<ElementChildren> {
         if let Some(parent) = parent {
             self.update_statements
-                .push(generate_element_set_children_call(
+                .push(generate_element_update_child_call(
                     parent,
                     children_position,
                     &generate_expression_function(&expression.expr),
@@ -535,5 +590,12 @@ impl Processor {
         }
 
         result
+    }
+
+    fn add_update_props_statement(&mut self, position: usize, props: &Option<ObjectLit>) {
+        if let Some(props) = props {
+            self.update_statements
+                .push(generate_element_update_props_call(position, props));
+        }
     }
 }

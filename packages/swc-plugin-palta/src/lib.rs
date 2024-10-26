@@ -77,11 +77,26 @@ impl VisitMut for TransformVisitor {
 
     fn visit_mut_import_decl(&mut self, node: &mut ImportDecl) {
         if node.src.deref().value == "palta" {
-            self.has_palta_import = self.has_palta_import
-                && node
+            if !self.has_palta_import {
+                let default_import = node
                     .specifiers
                     .iter()
-                    .any(|specifier| matches!(specifier.clone(), ImportSpecifier::Default(_)));
+                    .find(|specifier| matches!(specifier, ImportSpecifier::Default(_)));
+                node.specifiers = vec![match default_import {
+                    Some(import) => import.clone(),
+                    None => ImportSpecifier::Default(ImportDefaultSpecifier {
+                        span: DUMMY_SP,
+                        local: Ident {
+                            sym: "Palta".into(),
+                            ..Ident::default()
+                        },
+                    }),
+                }];
+
+                self.has_palta_import = true;
+            } else {
+                node.specifiers.clear();
+            }
         }
 
         node.visit_mut_children_with(self);

@@ -8,7 +8,20 @@ const App = () => {
     <div>
       <h1>Hello, world!</h1>
       <p>Count: {count}</p>
-      <button onClick={() => setCount((prev) => ++prev)}>Increment</button>
+      <button
+        onClick={() => {
+          setCount((prev) => ++prev);
+        }}
+      >
+        Increment
+      </button>
+      <button
+        onClick={() => {
+          setCount((prev) => --prev);
+        }}
+      >
+        Decrement
+      </button>
     </div>
   );
 };

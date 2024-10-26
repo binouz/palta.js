@@ -6,7 +6,8 @@ import {
   PaltaComponentElement,
   PaltaChildrenElement,
 } from "./types";
-import { EVENT_NAME } from "./events";
+import { EVENT_MAP, EVENT_NAME, EventName } from "./events";
+import { Scheduler } from "./scheduler";
 
 type PaltaComponentDefinition<T = any> = {
   childrenElement: PaltaChildrenElement | null;
@@ -19,6 +20,8 @@ type PaltaComponent<T = any> = () => PaltaComponentDefinition<T>;
 type ElementTag = keyof JSX.IntrinsicElements;
 
 const setHtmlElementProps = (element: HTMLElement, props: any) => {
+  const boundEventListeners = new Map<EventName, EventListener>();
+
   for (const [key, value] of Object.entries(props as Record<string, any>)) {
     if (key === "style") {
       if (!value || typeof value !== "object") continue;
@@ -32,12 +35,25 @@ const setHtmlElementProps = (element: HTMLElement, props: any) => {
     }
 
     if (EVENT_NAME.includes(key as string)) {
-      // TODO
+      element.addEventListener(EVENT_MAP[key as EventName], value);
+      boundEventListeners.set(key as EventName, value);
       continue;
     }
 
     element.setAttribute(key, value as string);
   }
+
+  return boundEventListeners;
+};
+
+const clearEventListeners = (
+  element: HTMLElement,
+  listeners: Map<EventName, EventListener>
+) => {
+  for (const [key, value] of listeners) {
+    element.removeEventListener(EVENT_MAP[key], value);
+  }
+  listeners.clear();
 };
 
 const isPaltaElement = (node: PaltaNode): node is PaltaElement =>
@@ -171,6 +187,7 @@ namespace Palta {
     children: Node[]
   ): PaltaTagElement => {
     const element = document.createElement(tag);
+    let boundEventListeners = new Map<EventName, EventListener>();
 
     return {
       [PaltaElementSymbol]: "tag",
@@ -188,11 +205,13 @@ namespace Palta {
         return element;
       },
       unmount: () => {
+        clearEventListeners(element, boundEventListeners);
         unmountChildren(children);
         element.remove();
       },
       updateProps: (props: any) => {
-        setHtmlElementProps(element, props);
+        clearEventListeners(element, boundEventListeners);
+        boundEventListeners = setHtmlElementProps(element, props);
       },
       updateChild: (index: number, value: () => PaltaNode) => {
         updateElementChild(element, index, value());
@@ -224,16 +243,21 @@ namespace Palta {
       throw new Error(`Element with selector "${selector}" not found`);
     }
 
+    Scheduler.init();
+
     const instance = createComponent(
       component as unknown as Palta.Component,
       []
     ) as PaltaComponentElement;
 
     instance.mount(root as HTMLElement, 0);
+    instance.updateProps({});
+
+    Scheduler.get().start();
   };
 
-  export const componentUpdate = (_: () => void) => {
-    // TODO
+  export const componentUpdate = (fn: () => void) => {
+    Scheduler.get().enqueueUpdate(fn);
   };
 }
 
@@ -244,4 +268,6 @@ declare namespace Palta {
 
 export default Palta;
 
-export declare const $state: <T = any>(value: T) => [T, Palta.StateUpdater<T>];
+export const $state = <T = any>(value: T): [T, Palta.StateUpdater<T>] => {
+  return [value, (_: Palta.StateUpdaterValue<T>) => {}];
+}

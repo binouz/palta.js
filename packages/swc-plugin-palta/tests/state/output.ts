@@ -1,5 +1,4 @@
 import Palta from "palta";
-import { $state } from "palta";
 
 const Component = (): Palta.ComponentDefinition<{}> => {
   const __$element$1 = Palta.createElement("h1", ["Hello, ", "", "!"]);
