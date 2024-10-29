@@ -1,4 +1,17 @@
-import Palta, { $state } from "palta";
+import Palta, { $effect, $state } from "palta";
+
+// @Palta.component
+const ValueInfo = ({ value }: { value: number }) => {
+  $effect(() => {
+    console.log("Value has changed");
+  }, [value]);
+
+  return (
+    <p>
+      {value > 0 ? "Positive" : value < 0 ? "Negative" : "Zero"}
+    </p>
+  )
+}
 
 // @Palta.component
 const App = () => {
@@ -22,6 +35,7 @@ const App = () => {
       >
         Decrement
       </button>
+      <ValueInfo value={count} />
     </div>
   );
 };

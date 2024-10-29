@@ -37,6 +37,7 @@ pub fn pat_to_expr(pat: &Pat) -> Expr {
     match pat {
         Pat::Ident(binding_ident) => Expr::Ident(binding_ident.id.clone()),
         Pat::Array(array_pat) => Expr::Array(ArrayLit {
+            span: array_pat.span,
             elems: array_pat
                 .elems
                 .iter()
@@ -47,15 +48,15 @@ pub fn pat_to_expr(pat: &Pat) -> Expr {
                     })
                 })
                 .collect(),
-            ..ArrayLit::default()
         }),
         Pat::Object(object_pat) => Expr::Object(ObjectLit {
+            span: object_pat.span,
             props: object_pat
                 .props
                 .iter()
                 .map(|prop| match prop {
                     ObjectPatProp::Rest(rest) => PropOrSpread::Spread(SpreadElement {
-                        dot3_token: DUMMY_SP,
+                        dot3_token: rest.dot3_token,
                         expr: Box::new(pat_to_expr(&rest.arg.clone())),
                     }),
                     ObjectPatProp::KeyValue(key_value) => {
@@ -68,23 +69,19 @@ pub fn pat_to_expr(pat: &Pat) -> Expr {
                         PropOrSpread::Prop(Box::new(match assign_pat.value.clone() {
                             Some(expr) => Prop::KeyValue(KeyValueProp {
                                 key: PropName::Ident(IdentName {
-                                    span: DUMMY_SP,
+                                    span: assign_pat.key.id.span,
                                     sym: assign_pat.key.id.sym.clone(),
                                 }),
                                 value: expr,
                             }),
-                            None => Prop::Shorthand(Ident {
-                                sym: assign_pat.key.id.sym.clone(),
-                                ..Ident::default()
-                            }),
+                            None => Prop::Shorthand(assign_pat.key.id.clone()),
                         }))
                     }
                 })
                 .collect(),
-            ..ObjectLit::default()
         }),
         Pat::Assign(assign_pat) => Expr::Assign(AssignExpr {
-            span: DUMMY_SP,
+            span: assign_pat.span,
             op: AssignOp::Assign,
             left: match assign_pat.left.deref() {
                 Pat::Ident(ident) => AssignTarget::Simple(SimpleAssignTarget::Ident(ident.clone())),

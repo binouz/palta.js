@@ -2,7 +2,7 @@
 
 - Effects
 - Support for inline components
-- SSR
+- if statements in component body
 
 # Bugs
 
@@ -11,4 +11,6 @@
 # Nice to have
 
 - Runtime update call analysis for better update scheduling
+- SSR
 - HMR
+- auto memoization

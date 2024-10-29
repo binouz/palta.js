@@ -259,6 +259,27 @@ namespace Palta {
   export const componentUpdate = (fn: () => void) => {
     Scheduler.get().enqueueUpdate(fn);
   };
+
+  export const runEffect = (
+    effect: {
+      deps: null | any[];
+      callback: () => void;
+      cleanup: (() => void) | null;
+    },
+    deps: any[]
+  ) => {
+    const shouldRun = effect.deps === null || effect.deps.some((dep, i) => dep !== deps[i]);
+
+    if (shouldRun) {
+      if (effect.cleanup) {
+        effect.cleanup();
+      }
+
+      effect.callback();
+    }
+
+    effect.deps = deps;
+  };
 }
 
 declare namespace Palta {
@@ -270,4 +291,6 @@ export default Palta;
 
 export const $state = <T = any>(value: T): [T, Palta.StateUpdater<T>] => {
   return [value, (_: Palta.StateUpdaterValue<T>) => {}];
-}
+};
+
+export const $effect = (_callback: () => void, _deps: any[]) => {};

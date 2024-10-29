@@ -10,14 +10,14 @@ const palta = (): Plugin => {
     config: () => ({
       esbuild: false,
     }),
-    transform(code, id) {
+    async transform(code, id) {
       const isTS = typescriptFilter(id);
 
       if (!javascriptFilter(id) && !isTS) {
         return;
       }
 
-      return transform(code, {
+      const result = await transform(code, {
         jsc: {
           parser: isTS
             ? {
@@ -33,6 +33,9 @@ const palta = (): Plugin => {
           },
         },
       });
+
+      console.log(result.code)
+      return result;
     },
   };
 };

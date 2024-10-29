@@ -10,8 +10,8 @@ use swc_core::ecma::ast::{
 };
 
 use crate::processor::{
-    ComponentElementDescriptor, ComponentName, ElementChildren, ElementDescriptor, Processor,
-    StateDescriptor, TagElementDescriptor,
+    ComponentElementDescriptor, ComponentName, EffectDescriptor, ElementChildren,
+    ElementDescriptor, Processor, StateDescriptor, TagElementDescriptor,
 };
 use crate::utils::{jsx_expr_to_expr, pat_to_expr};
 
@@ -188,6 +188,52 @@ fn generate_props_variable_declaration(props: Pat) -> Stmt {
     })))
 }
 
+fn generate_run_effect_call(processor: &Processor) -> Vec<Stmt> {
+    let mut result = vec![];
+
+    for (index, effect) in processor.get_effects().iter().enumerate() {
+        result.push(Stmt::Expr(ExprStmt {
+            expr: Box::new(Expr::Call(CallExpr {
+                callee: Callee::Expr(Box::new(Expr::Member(MemberExpr {
+                    obj: Box::new(Expr::Ident(Ident {
+                        sym: "Palta".into(),
+                        ..Ident::default()
+                    })),
+                    prop: MemberProp::Ident(IdentName {
+                        sym: "runEffect".into(),
+                        ..IdentName::default()
+                    }),
+                    ..MemberExpr::default()
+                }))),
+                args: vec![
+                    ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(Expr::Ident(Ident {
+                            sym: format!("__$effect${}", index).into(),
+                            ..Ident::default()
+                        })),
+                    },
+                    ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(Expr::Array(ArrayLit {
+                            elems: effect
+                                .deps
+                                .iter()
+                                .map(|dependency| Some(dependency.clone()))
+                                .collect(),
+                            ..ArrayLit::default()
+                        })),
+                    },
+                ],
+                ..CallExpr::default()
+            })),
+            ..ExprStmt::default()
+        }));
+    }
+
+    result
+}
+
 fn generate_component_update_function(processor: &Processor, props: Pat) -> Stmt {
     let mut stmts = vec![Stmt::Expr(ExprStmt {
         expr: Box::new(Expr::Assign(AssignExpr {
@@ -206,6 +252,7 @@ fn generate_component_update_function(processor: &Processor, props: Pat) -> Stmt
     })];
 
     stmts.append(&mut processor.get_update_statements().clone());
+    stmts.append(&mut generate_run_effect_call(processor));
 
     match processor.get_update_statements().len() {
         0 => Stmt::Empty(EmptyStmt { span: DUMMY_SP }),
@@ -329,13 +376,6 @@ fn generate_component_return_statement(processor: &Processor) -> Stmt {
         ..ReturnStmt::default()
     })
 }
-
-/*
-const setName: Palta.StateUpdater<string> = (value) => {
-    name = typeof value === 'function' ? value(name) : value;
-    Palta.componentUpdate(() => __$update(__$props));
-};
-*/
 
 fn generate_state_updater_function(state_variable_name: &Ident) -> Expr {
     Expr::Arrow(ArrowExpr {
@@ -515,6 +555,65 @@ fn generate_state_statements(
     }
 }
 
+fn generate_effect_statement(index: usize, effect: &EffectDescriptor) -> Stmt {
+    Stmt::Decl(Decl::Var(Box::new(VarDecl {
+        kind: VarDeclKind::Const,
+        decls: vec![VarDeclarator {
+            span: DUMMY_SP,
+            name: Pat::Ident(BindingIdent {
+                id: Ident {
+                    sym: format!("__$effect${}", index).into(),
+                    ..Ident::default()
+                },
+                ..BindingIdent::default()
+            }),
+            init: Some(Box::new(Expr::Object(ObjectLit {
+                props: vec![
+                    PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                        key: PropName::Ident(IdentName {
+                            sym: "deps".into(),
+                            ..IdentName::default()
+                        }),
+                        value: Box::new(Expr::Lit(Lit::Null(Null { span: DUMMY_SP }))),
+                    }))),
+                    PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                        key: PropName::Ident(IdentName {
+                            sym: "callback".into(),
+                            ..IdentName::default()
+                        }),
+                        value: Box::new(Expr::Arrow(ArrowExpr {
+                            body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+                                stmts: effect.callback.clone(),
+                                ..BlockStmt::default()
+                            })),
+                            ..ArrowExpr::default()
+                        })),
+                    }))),
+                    PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                        key: PropName::Ident(IdentName {
+                            sym: "cleanup".into(),
+                            ..IdentName::default()
+                        }),
+                        value: match &effect.cleanup {
+                            Some(cleanup) => Box::new(Expr::Arrow(ArrowExpr {
+                                body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+                                    stmts: cleanup.clone(),
+                                    ..BlockStmt::default()
+                                })),
+                                ..ArrowExpr::default()
+                            })),
+                            None => Box::new(Expr::Lit(Lit::Null(Null { span: DUMMY_SP }))),
+                        },
+                    }))),
+                ],
+                ..ObjectLit::default()
+            }))),
+            definite: false,
+        }],
+        ..VarDecl::default()
+    })))
+}
+
 fn generate_component_statements(
     processor: &Processor,
     props: Pat,
@@ -532,6 +631,10 @@ fn generate_component_statements(
 
     for state in processor.get_states() {
         generate_state_statements(&mut statements, state, is_typescript);
+    }
+
+    for (index, effect) in processor.get_effects().iter().enumerate() {
+        statements.push(generate_effect_statement(index, effect));
     }
 
     statements.push(generate_component_update_function(processor, props.clone()));

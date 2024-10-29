@@ -3,11 +3,11 @@ use std::ops::Deref;
 
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
-    ArrowExpr, BlockStmt, BlockStmtOrExpr, Bool, CallExpr, Callee, Decl, Expr, Function, Ident,
-    JSXAttrName, JSXAttrOrSpread, JSXAttrValue, JSXElement, JSXElementChild, JSXElementName,
-    JSXExprContainer, JSXFragment, JSXOpeningElement, JSXText, KeyValueProp, Lit, MemberExpr,
-    ObjectLit, ParenExpr, Pat, Prop, PropName, PropOrSpread, ReturnStmt, Stmt, TsTypeAnn,
-    VarDeclarator,
+    ArrowExpr, BlockStmt, BlockStmtOrExpr, Bool, CallExpr, Callee, Decl, Expr, ExprOrSpread,
+    ExprStmt, Function, Ident, JSXAttrName, JSXAttrOrSpread, JSXAttrValue, JSXElement,
+    JSXElementChild, JSXElementName, JSXExprContainer, JSXFragment, JSXOpeningElement, JSXText,
+    KeyValueProp, Lit, MemberExpr, ObjectLit, ParenExpr, Pat, Prop, PropName, PropOrSpread,
+    ReturnStmt, Stmt, TsTypeAnn, VarDeclarator,
 };
 
 use crate::generators::{
@@ -237,12 +237,19 @@ pub struct StateDescriptor {
     pub type_ann: Option<Box<TsTypeAnn>>,
 }
 
+pub struct EffectDescriptor {
+    pub deps: Vec<ExprOrSpread>,
+    pub callback: Vec<Stmt>,
+    pub cleanup: Option<Vec<Stmt>>,
+}
+
 pub struct Processor {
     elements: Vec<ElementDescriptor>,
     children_element: Option<usize>,
     update_statements: Vec<Stmt>,
     root_element: Option<usize>,
     states: Vec<StateDescriptor>,
+    effects: Vec<EffectDescriptor>,
 }
 
 fn get_element_props(element: &JSXOpeningElement) -> Option<ObjectLit> {
@@ -325,6 +332,16 @@ fn is_palta_state_call(call_expression: &CallExpr) -> bool {
     false
 }
 
+fn is_palta_effect_call(call_expression: &CallExpr) -> bool {
+    if let Callee::Expr(callee) = &call_expression.callee {
+        if let Expr::Ident(ident) = callee.deref() {
+            return ident.sym == "$effect";
+        }
+    }
+
+    false
+}
+
 impl Processor {
     pub fn new() -> Self {
         Processor {
@@ -333,6 +350,7 @@ impl Processor {
             update_statements: vec![],
             root_element: None,
             states: vec![],
+            effects: vec![],
         }
     }
 
@@ -354,6 +372,10 @@ impl Processor {
 
     pub fn get_states(&self) -> &Vec<StateDescriptor> {
         &self.states
+    }
+
+    pub fn get_effects(&self) -> &Vec<EffectDescriptor> {
+        &self.effects
     }
 
     pub fn process_function(&mut self, node: &Function) {
@@ -397,6 +419,15 @@ impl Processor {
                     self.processs_declaration(decl);
                 }
                 Stmt::If(_) => {}
+                Stmt::Expr(expr) => {
+                    if let Expr::Call(call_expression) = expr.expr.deref() {
+                        if is_palta_effect_call(&call_expression.clone()) {
+                            self.process_palta_effect_call(call_expression);
+                        }
+                    } else {
+                        self.update_statements.push(Stmt::Expr(expr.clone()));
+                    }
+                }
                 stmt => {
                     self.update_statements.push(stmt.clone());
                 }
@@ -452,8 +483,9 @@ impl Processor {
                     self.process_var_declarator(decl);
                 }
             }
-            Decl::Fn(_) => {}
-            _ => {}
+            decl => {
+                self.update_statements.push(Stmt::Decl(decl.clone()));
+            }
         }
     }
 
@@ -500,6 +532,66 @@ impl Processor {
         } else {
             panic!("Palta state declaration should be an array pattern");
         }
+    }
+
+    fn process_palta_effect_call(&mut self, call_expression: &CallExpr) {
+        if call_expression.args.len() != 2 {
+            panic!("Palta effect should have two arguments");
+        }
+
+        let callback = match call_expression.args[0].expr.deref() {
+            Expr::Arrow(arrow) => match arrow.body.deref() {
+                BlockStmtOrExpr::BlockStmt(block) => block.stmts.clone(),
+                BlockStmtOrExpr::Expr(expr) => vec![Stmt::Expr(ExprStmt {
+                    span: DUMMY_SP,
+                    expr: expr.clone(),
+                })],
+            },
+            _ => panic!("First argument of Palta effect should be an arrow function"),
+        };
+
+        let deps = match call_expression.args[1].expr.deref() {
+            Expr::Array(array) => array.elems.clone().into_iter().flatten().collect(),
+            _ => panic!("Second argument of Palta effect should be an array"),
+        };
+
+        let cleanup = match call_expression.args[1].expr.deref() {
+            Expr::Arrow(arrow) => match arrow.body.deref() {
+                BlockStmtOrExpr::BlockStmt(block) => {
+                    let return_statement = block
+                        .stmts
+                        .iter()
+                        .find(|stmt| matches!(stmt, Stmt::Return(_)));
+
+                    return_statement.map(|stmt| match stmt {
+                        Stmt::Return(stmt) => match &stmt.arg {
+                            Some(arg) => match arg.deref() {
+                                Expr::Arrow(arrow) => match arrow.body.deref() {
+                                    BlockStmtOrExpr::BlockStmt(block) => block.stmts.clone(),
+                                    BlockStmtOrExpr::Expr(expr) => vec![Stmt::Expr(ExprStmt {
+                                        span: DUMMY_SP,
+                                        expr: expr.clone(),
+                                    })],
+                                },
+                                _ => panic!(
+                                    "Return value from an effect should be an arrow function"
+                                ),
+                            },
+                            None => vec![],
+                        },
+                        _ => vec![],
+                    })
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+
+        self.effects.push(EffectDescriptor {
+            deps,
+            callback,
+            cleanup,
+        });
     }
 
     fn process_jsx_element(&mut self, element: &JSXElement) -> Vec<ElementChildren> {
