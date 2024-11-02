@@ -1,20 +1,23 @@
 use core::panic;
+use std::collections::VecDeque;
 use std::ops::Deref;
 
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
     ArrowExpr, BlockStmt, BlockStmtOrExpr, Bool, CallExpr, Callee, Decl, Expr, ExprOrSpread,
     ExprStmt, Function, Ident, JSXAttrName, JSXAttrOrSpread, JSXAttrValue, JSXElement,
-    JSXElementChild, JSXElementName, JSXExprContainer, JSXFragment, JSXOpeningElement, JSXText,
-    KeyValueProp, Lit, MemberExpr, ObjectLit, ParenExpr, Pat, Prop, PropName, PropOrSpread,
-    ReturnStmt, Stmt, TsTypeAnn, VarDeclarator,
+    JSXElementChild, JSXElementName, JSXExpr, JSXExprContainer, JSXFragment, JSXOpeningElement,
+    JSXText, KeyValueProp, Lit, MemberExpr, ObjectLit, ParenExpr, Pat, Prop, PropName,
+    PropOrSpread, ReturnStmt, Stmt, TsTypeAnn, VarDeclarator,
 };
 
 use crate::generators::{
-    generate_element_update_child_call, generate_element_update_props_call,
-    generate_expression_function,
+    generate_element_initialize_call, generate_element_update_child_call,
+    generate_element_update_props_call, generate_expression_function,
 };
-use crate::utils::{jsx_expr_to_expr, jsx_member_expr_to_member_expr};
+use crate::utils::{
+    jsx_expr_to_expr, jsx_member_expr_to_member_expr, replace_jsx_elements_in_expression,
+};
 
 const HTML_ELEMENT_TAGS: &[&str] = &[
     "a",
@@ -246,6 +249,7 @@ pub struct EffectDescriptor {
 pub struct Processor {
     elements: Vec<ElementDescriptor>,
     children_element: Option<usize>,
+    initialize_statements: Vec<Stmt>,
     update_statements: Vec<Stmt>,
     root_element: Option<usize>,
     states: Vec<StateDescriptor>,
@@ -347,6 +351,7 @@ impl Processor {
         Processor {
             elements: vec![],
             children_element: None,
+            initialize_statements: vec![],
             update_statements: vec![],
             root_element: None,
             states: vec![],
@@ -364,6 +369,10 @@ impl Processor {
 
     pub fn get_children_element(&self) -> Option<usize> {
         self.children_element
+    }
+
+    pub fn get_initialze_statements(&self) -> &Vec<Stmt> {
+        &self.initialize_statements
     }
 
     pub fn get_update_statements(&self) -> &Vec<Stmt> {
@@ -426,10 +435,12 @@ impl Processor {
                         }
                     } else {
                         self.update_statements.push(Stmt::Expr(expr.clone()));
+                        self.initialize_statements.push(Stmt::Expr(expr.clone()));
                     }
                 }
                 stmt => {
                     self.update_statements.push(stmt.clone());
+                    self.initialize_statements.push(stmt.clone());
                 }
             }
         }
@@ -476,29 +487,57 @@ impl Processor {
         }
     }
 
-    fn processs_declaration(&mut self, decl: &Decl) {
-        match decl {
-            Decl::Var(var_decl) => {
-                for decl in &var_decl.decls {
-                    self.process_var_declarator(decl);
-                }
+    fn process_expression(&mut self, expr: &Expr) -> Vec<ElementChildren> {
+        match expr {
+            Expr::Paren(paren_expr) => self.process_parenthesis_expression(paren_expr),
+            Expr::JSXElement(element) => self.process_jsx_element(element),
+            Expr::JSXFragment(fragment) => self.process_jsx_fragment(fragment),
+            Expr::Bin(bin_expr) => self.process_expression(bin_expr.right.deref()),
+            Expr::Cond(cond_expr) => {
+                let mut children = self.process_expression(cond_expr.cons.deref());
+                children.append(&mut self.process_expression(cond_expr.alt.deref()));
+                children
             }
-            decl => {
-                self.update_statements.push(Stmt::Decl(decl.clone()));
+            _ => {
+                vec![]
             }
         }
     }
 
-    fn process_var_declarator(&mut self, decl: &VarDeclarator) {
+    fn processs_declaration(&mut self, decl: &Decl) {
+        match decl {
+            Decl::Var(var_decl) => {
+                for decl in &var_decl.decls {
+                    if !self.process_var_declarator(decl) {
+                        self.update_statements
+                            .push(Stmt::Decl(Decl::Var(var_decl.clone())));
+                        self.initialize_statements
+                            .push(Stmt::Decl(Decl::Var(var_decl.clone())));
+                    }
+                }
+            }
+            decl => {
+                self.update_statements.push(Stmt::Decl(decl.clone()));
+                self.initialize_statements.push(Stmt::Decl(decl.clone()));
+            }
+        }
+    }
+
+    fn process_var_declarator(&mut self, decl: &VarDeclarator) -> bool {
         if decl.init.is_none() {
-            return;
+            return false;
         }
 
-        if let Expr::Call(call_expression) = decl.init.as_ref().unwrap().deref() {
+        let expr = decl.init.as_ref().unwrap();
+
+        if let Expr::Call(call_expression) = expr.deref() {
             if is_palta_state_call(&call_expression.clone()) {
                 self.process_palta_state_declaration(&decl.name, call_expression);
             }
+            return true;
         }
+
+        false
     }
 
     fn process_palta_state_declaration(&mut self, name: &Pat, call_expression: &CallExpr) {
@@ -622,7 +661,12 @@ impl Processor {
             }
         };
 
-        self.add_update_props_statement(position, &props);
+        if matches!(self.elements[position], ElementDescriptor::Tag(_))
+            || matches!(self.elements[position], ElementDescriptor::Component(_))
+        {
+            self.add_update_props_statement(position, &props);
+            self.add_initialize_statement(position, &props);
+        }
 
         vec![ElementChildren::Element(position)]
     }
@@ -648,11 +692,30 @@ impl Processor {
         children_position: usize,
     ) -> Vec<ElementChildren> {
         if let Some(parent) = parent {
+            let update_expression = match &expression.expr {
+                JSXExpr::Expr(expr) => {
+                    let expr_elements = self.process_expression(expr.deref());
+
+                    if !expr_elements.is_empty() {
+                        replace_jsx_elements_in_expression(expr, &mut VecDeque::from(expr_elements))
+                    } else {
+                        expr.deref().clone()
+                    }
+                }
+                expr => jsx_expr_to_expr(expr),
+            };
+
             self.update_statements
                 .push(generate_element_update_child_call(
                     parent,
                     children_position,
-                    &generate_expression_function(&expression.expr),
+                    &generate_expression_function(&update_expression),
+                ));
+            self.initialize_statements
+                .push(generate_element_update_child_call(
+                    parent,
+                    children_position,
+                    &generate_expression_function(&update_expression),
                 ));
         }
 
@@ -689,5 +752,10 @@ impl Processor {
             self.update_statements
                 .push(generate_element_update_props_call(position, props));
         }
+    }
+
+    fn add_initialize_statement(&mut self, position: usize, props: &Option<ObjectLit>) {
+        self.initialize_statements
+            .push(generate_element_initialize_call(position, props));
     }
 }

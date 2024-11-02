@@ -3,17 +3,17 @@ use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
     ArrayLit, ArrowExpr, AssignExpr, AssignOp, AssignTarget, BinExpr, BinaryOp, BindingIdent,
     BlockStmt, BlockStmtOrExpr, CallExpr, Callee, CondExpr, Decl, EmptyStmt, Expr, ExprOrSpread,
-    ExprStmt, Function, Ident, IdentName, JSXExpr, KeyValueProp, Lit, MemberExpr, MemberProp, Null,
-    Number, ObjectLit, ObjectPat, ParenExpr, Pat, Prop, PropName, PropOrSpread, ReturnStmt,
+    ExprStmt, Function, Ident, IdentName, KeyValueProp, Lit, MemberExpr, MemberProp, Null, Number,
+    ObjectLit, ObjectPat, ParenExpr, Pat, Prop, PropName, PropOrSpread, ReturnStmt,
     SimpleAssignTarget, Stmt, Str, TsEntityName, TsQualifiedName, TsType, TsTypeAnn,
     TsTypeParamInstantiation, TsTypeRef, UnaryExpr, UnaryOp, VarDecl, VarDeclKind, VarDeclarator,
 };
 
 use crate::processor::{
-    ComponentElementDescriptor, ComponentName, EffectDescriptor, ElementChildren,
-    ElementDescriptor, Processor, StateDescriptor, TagElementDescriptor,
+    ComponentElementDescriptor, ComponentName, ElementChildren, ElementDescriptor, Processor,
+    StateDescriptor, TagElementDescriptor,
 };
-use crate::utils::{jsx_expr_to_expr, pat_to_expr};
+use crate::utils::pat_to_expr;
 
 pub enum ComponentDeclaration<'a> {
     Function(&'a mut Function),
@@ -118,7 +118,7 @@ fn generate_palta_children_call() -> Option<Box<Expr>> {
                 ..Ident::default()
             })),
             prop: MemberProp::Ident(IdentName {
-                sym: "children".into(),
+                sym: "createChildren".into(),
                 ..IdentName::default()
             }),
             ..MemberExpr::default()
@@ -212,6 +212,29 @@ fn generate_run_effect_call(processor: &Processor) -> Vec<Stmt> {
                             sym: format!("__$effect${}", index).into(),
                             ..Ident::default()
                         })),
+                    },
+                    ExprOrSpread {
+                        spread: None,
+                        expr: Box::new(Expr::Arrow(ArrowExpr {
+                            body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+                                stmts: effect.callback.clone(),
+                                ..BlockStmt::default()
+                            })),
+                            ..ArrowExpr::default()
+                        })),
+                    },
+                    ExprOrSpread {
+                        spread: None,
+                        expr: match &effect.cleanup {
+                            Some(cleanup) => Box::new(Expr::Arrow(ArrowExpr {
+                                body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+                                    stmts: cleanup.clone(),
+                                    ..BlockStmt::default()
+                                })),
+                                ..ArrowExpr::default()
+                            })),
+                            None => Box::new(Expr::Lit(Lit::Null(Null { span: DUMMY_SP }))),
+                        },
                     },
                     ExprOrSpread {
                         spread: None,
@@ -326,7 +349,36 @@ fn generate_root_declaration_statement(processor: &Processor) -> Stmt {
     })))
 }
 
-fn generate_component_return_statement(processor: &Processor) -> Stmt {
+fn generate_initialize_function(processor: &Processor, props: Pat) -> Box<Expr> {
+    let mut stmts = vec![Stmt::Expr(ExprStmt {
+        expr: Box::new(Expr::Assign(AssignExpr {
+            op: AssignOp::Assign,
+            left: AssignTarget::Simple(SimpleAssignTarget::Ident(BindingIdent {
+                id: Ident {
+                    sym: "__$props".into(),
+                    ..Ident::default()
+                },
+                type_ann: None,
+            })),
+            right: Box::new(pat_to_expr(&props.clone())),
+            ..AssignExpr::default()
+        })),
+        ..ExprStmt::default()
+    })];
+
+    stmts.append(&mut processor.get_initialze_statements().clone());
+
+    Box::new(Expr::Arrow(ArrowExpr {
+        body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+            stmts,
+            ..BlockStmt::default()
+        })),
+        params: vec![props],
+        ..ArrowExpr::default()
+    }))
+}
+
+fn generate_component_return_statement(processor: &Processor, props: Pat) -> Stmt {
     Stmt::Return(ReturnStmt {
         arg: Some(Box::new(Expr::Object(ObjectLit {
             props: vec![
@@ -342,6 +394,13 @@ fn generate_component_return_statement(processor: &Processor) -> Stmt {
                         }),
                         _ => Expr::Lit(Lit::Null(Null { span: DUMMY_SP })),
                     }),
+                }))),
+                PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                    key: PropName::Ident(IdentName {
+                        sym: "initialize".into(),
+                        ..IdentName::default()
+                    }),
+                    value: generate_initialize_function(processor, props),
                 }))),
                 PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
                     key: PropName::Ident(IdentName {
@@ -555,7 +614,7 @@ fn generate_state_statements(
     }
 }
 
-fn generate_effect_statement(index: usize, effect: &EffectDescriptor) -> Stmt {
+fn generate_effect_statement(index: usize) -> Stmt {
     Stmt::Decl(Decl::Var(Box::new(VarDecl {
         kind: VarDeclKind::Const,
         decls: vec![VarDeclarator {
@@ -568,44 +627,13 @@ fn generate_effect_statement(index: usize, effect: &EffectDescriptor) -> Stmt {
                 ..BindingIdent::default()
             }),
             init: Some(Box::new(Expr::Object(ObjectLit {
-                props: vec![
-                    PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
-                        key: PropName::Ident(IdentName {
-                            sym: "deps".into(),
-                            ..IdentName::default()
-                        }),
-                        value: Box::new(Expr::Lit(Lit::Null(Null { span: DUMMY_SP }))),
-                    }))),
-                    PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
-                        key: PropName::Ident(IdentName {
-                            sym: "callback".into(),
-                            ..IdentName::default()
-                        }),
-                        value: Box::new(Expr::Arrow(ArrowExpr {
-                            body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
-                                stmts: effect.callback.clone(),
-                                ..BlockStmt::default()
-                            })),
-                            ..ArrowExpr::default()
-                        })),
-                    }))),
-                    PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
-                        key: PropName::Ident(IdentName {
-                            sym: "cleanup".into(),
-                            ..IdentName::default()
-                        }),
-                        value: match &effect.cleanup {
-                            Some(cleanup) => Box::new(Expr::Arrow(ArrowExpr {
-                                body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
-                                    stmts: cleanup.clone(),
-                                    ..BlockStmt::default()
-                                })),
-                                ..ArrowExpr::default()
-                            })),
-                            None => Box::new(Expr::Lit(Lit::Null(Null { span: DUMMY_SP }))),
-                        },
-                    }))),
-                ],
+                props: vec![PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                    key: PropName::Ident(IdentName {
+                        sym: "deps".into(),
+                        ..IdentName::default()
+                    }),
+                    value: Box::new(Expr::Lit(Lit::Null(Null { span: DUMMY_SP }))),
+                })))],
                 ..ObjectLit::default()
             }))),
             definite: false,
@@ -633,13 +661,16 @@ fn generate_component_statements(
         generate_state_statements(&mut statements, state, is_typescript);
     }
 
-    for (index, effect) in processor.get_effects().iter().enumerate() {
-        statements.push(generate_effect_statement(index, effect));
+    for index in 0..processor.get_effects().len() {
+        statements.push(generate_effect_statement(index));
     }
 
     statements.push(generate_component_update_function(processor, props.clone()));
     statements.push(generate_root_declaration_statement(processor));
-    statements.push(generate_component_return_statement(processor));
+    statements.push(generate_component_return_statement(
+        processor,
+        props.clone(),
+    ));
 
     statements
 }
@@ -656,7 +687,15 @@ fn generate_type_annotation_from_props(pat: Pat) -> Option<Box<TsType>> {
 
 fn generate_function_component_declaration(function: &mut Function) {
     let mut processor: Processor = Processor::new();
-    let props = function.params.first().unwrap().pat.clone();
+    let props = match function.params.first() {
+        Some(param) => param.pat.clone(),
+        None => Pat::Object(ObjectPat {
+            span: DUMMY_SP,
+            props: vec![],
+            optional: false,
+            type_ann: None,
+        }),
+    };
     let props_type_annotation = generate_type_annotation_from_props(props.clone());
 
     processor.process_function(function);
@@ -771,11 +810,11 @@ pub fn generate_component_declaration(node: ComponentDeclaration) {
     };
 }
 
-pub fn generate_expression_function(expression: &JSXExpr) -> Box<Expr> {
+pub fn generate_expression_function(expression: &Expr) -> Box<Expr> {
     Box::new(Expr::Arrow(ArrowExpr {
         body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
             stmts: vec![Stmt::Return(ReturnStmt {
-                arg: Some(Box::new(jsx_expr_to_expr(expression))),
+                arg: Some(Box::new(expression.clone())),
                 ..ReturnStmt::default()
             })],
             ..BlockStmt::default()
@@ -839,6 +878,39 @@ pub fn generate_element_update_props_call(element_position: usize, props: &Objec
             args: vec![ExprOrSpread {
                 spread: None,
                 expr: Box::new(Expr::Object(props.clone())),
+            }],
+            ..CallExpr::default()
+        })),
+        ..ExprStmt::default()
+    })
+}
+
+pub fn generate_element_initialize_call(
+    element_position: usize,
+    props: &Option<ObjectLit>,
+) -> Stmt {
+    Stmt::Expr(ExprStmt {
+        expr: Box::new(Expr::Call(CallExpr {
+            callee: Callee::Expr(Box::new(Expr::Member(MemberExpr {
+                obj: Box::new(Expr::Ident(Ident {
+                    sym: format!("__$element${}", element_position).into(),
+                    ..Ident::default()
+                })),
+                prop: MemberProp::Ident(IdentName {
+                    sym: "initialize".into(),
+                    ..IdentName::default()
+                }),
+                ..MemberExpr::default()
+            }))),
+            args: vec![ExprOrSpread {
+                spread: None,
+                expr: Box::new(Expr::Object(match props {
+                    Some(props) => props.clone(),
+                    None => ObjectLit {
+                        span: DUMMY_SP,
+                        props: vec![],
+                    },
+                })),
             }],
             ..CallExpr::default()
         })),

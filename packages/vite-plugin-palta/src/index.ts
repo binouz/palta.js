@@ -8,7 +8,9 @@ const palta = (): Plugin => {
   return {
     name: "palta",
     config: () => ({
-      esbuild: false,
+      esbuild: {
+        exclude: /\.[tj]sx?$/,
+      },
     }),
     async transform(code, id) {
       const isTS = typescriptFilter(id);
@@ -34,7 +36,6 @@ const palta = (): Plugin => {
         },
       });
 
-      console.log(result.code)
       return result;
     },
   };

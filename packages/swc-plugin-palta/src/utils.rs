@@ -1,13 +1,16 @@
+use std::collections::VecDeque;
 use std::ops::Deref;
 
 use swc_core::atoms::Atom;
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
-    ArrayLit, AssignExpr, AssignOp, AssignTarget, AssignTargetPat, Expr, ExprOrSpread, Ident,
-    IdentName, Invalid, JSXExpr, JSXMemberExpr, JSXObject, KeyValueProp, Lit, MemberExpr,
-    MemberProp, ObjectLit, ObjectPatProp, Pat, Prop, PropName, PropOrSpread, SimpleAssignTarget,
-    SpreadElement, Str,
+    ArrayLit, AssignExpr, AssignOp, AssignTarget, AssignTargetPat, BinExpr, CondExpr, Expr,
+    ExprOrSpread, Ident, IdentName, Invalid, JSXExpr, JSXMemberExpr, JSXObject, KeyValueProp, Lit,
+    MemberExpr, MemberProp, ObjectLit, ObjectPatProp, Pat, Prop, PropName, PropOrSpread,
+    SimpleAssignTarget, SpreadElement, Str,
 };
+
+use crate::processor::ElementChildren;
 
 pub fn jsx_expr_to_expr(expression: &JSXExpr) -> Expr {
     match expression {
@@ -98,5 +101,50 @@ pub fn pat_to_expr(pat: &Pat) -> Expr {
         Pat::Invalid(invalid) => Expr::Invalid(*invalid),
         Pat::Expr(expr) => *expr.clone(),
         _ => Expr::Invalid(Invalid { span: DUMMY_SP }),
+    }
+}
+
+pub fn replace_jsx_elements_in_expression(
+    expr: &Expr,
+    elements: &mut VecDeque<ElementChildren>,
+) -> Expr {
+    match expr {
+        Expr::Paren(paren_expr) => replace_jsx_elements_in_expression(&paren_expr.expr, elements),
+        Expr::JSXElement(_) => match elements.pop_front() {
+            Some(element) => match element {
+                ElementChildren::Text(text) => Expr::Lit(Lit::Str(Str {
+                    span: DUMMY_SP,
+                    value: text.into(),
+                    raw: None,
+                })),
+                ElementChildren::Element(position) => Expr::Ident(Ident {
+                    sym: format!("__$element${}", position).into(),
+                    ..Ident::default()
+                }),
+            },
+            None => Expr::Invalid(Invalid { span: DUMMY_SP }),
+        },
+        Expr::JSXFragment(_) => {
+            panic!("Implement JSX fragment in expression")
+        }
+        Expr::Bin(bin_expr) => Expr::Bin(BinExpr {
+            span: bin_expr.span,
+            op: bin_expr.op,
+            left: bin_expr.left.clone(),
+            right: Box::new(replace_jsx_elements_in_expression(
+                &bin_expr.right,
+                elements,
+            )),
+        }),
+        Expr::Cond(cond_expr) => Expr::Cond(CondExpr {
+            span: cond_expr.span,
+            test: cond_expr.test.clone(),
+            cons: Box::new(replace_jsx_elements_in_expression(
+                &cond_expr.cons,
+                elements,
+            )),
+            alt: Box::new(replace_jsx_elements_in_expression(&cond_expr.alt, elements)),
+        }),
+        _ => expr.clone(),
     }
 }

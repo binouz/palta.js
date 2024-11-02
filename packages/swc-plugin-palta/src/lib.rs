@@ -75,31 +75,58 @@ impl VisitMut for TransformVisitor {
         }
     }
 
+    fn visit_mut_export_default_decl(&mut self, node: &mut swc_core::ecma::ast::ExportDefaultDecl) {
+        if self.is_component(node.span_lo()) {
+            if let swc_core::ecma::ast::DefaultDecl::Fn(func) = &mut node.decl {
+                generate_component_declaration(ComponentDeclaration::Function(&mut func.function));
+                self.has_component = true;
+                return;
+            }
+        }
+
+        node.visit_mut_children_with(self);
+    }
+
     fn visit_mut_import_decl(&mut self, node: &mut ImportDecl) {
+        node.visit_mut_children_with(self);
+
         if node.src.deref().value == "palta" {
-            if !self.has_palta_import {
-                let default_import = node
-                    .specifiers
-                    .iter()
-                    .find(|specifier| matches!(specifier, ImportSpecifier::Default(_)));
-                node.specifiers = vec![match default_import {
-                    Some(import) => import.clone(),
-                    None => ImportSpecifier::Default(ImportDefaultSpecifier {
+            node.specifiers = node
+                .specifiers
+                .iter()
+                .filter_map(|specifier| match specifier {
+                    ImportSpecifier::Default(import) => {
+                        let mut new_import = import.clone();
+                        new_import.local.sym = "Palta".into();
+                        self.has_palta_import = true;
+                        Some(ImportSpecifier::Default(new_import))
+                    }
+                    ImportSpecifier::Named(import) => {
+                        if import.local.sym == "$effect"
+                            || import.local.sym == "$state"
+                            || import.local.sym == "Children"
+                        {
+                            None
+                        } else {
+                            Some(specifier.clone())
+                        }
+                    }
+                    _ => None,
+                })
+                .collect();
+
+            if node.specifiers.is_empty() {
+                self.has_palta_import = true;
+                node.specifiers
+                    .push(ImportSpecifier::Default(ImportDefaultSpecifier {
                         span: DUMMY_SP,
                         local: Ident {
                             sym: "Palta".into(),
                             ..Ident::default()
                         },
-                    }),
-                }];
-
-                self.has_palta_import = true;
-            } else {
-                node.specifiers.clear();
+                    }));
             }
         }
-
-        node.visit_mut_children_with(self);
     }
 
     fn visit_mut_module(&mut self, node: &mut swc_core::ecma::ast::Module) {

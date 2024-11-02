@@ -14,6 +14,14 @@ function Component(): Palta.ComponentDefinition<{ name: string }> {
 
   return {
     childrenElement: null,
+    initialize: ({ name }: { name: string }) => {
+      __$props = { name };
+      __$element$1.updateChild(1, () => {
+        return name;
+      });
+      __$element$1.initialize({});
+      __$element$0.initialize({});
+    },
     update: __$update,
     getRoot: () => __$root,
   };

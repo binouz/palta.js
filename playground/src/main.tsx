@@ -1,41 +1,25 @@
-import Palta, { $effect, $state } from "palta";
+import Palta, { $state } from "palta";
 
-// @Palta.component
-const ValueInfo = ({ value }: { value: number }) => {
-  $effect(() => {
-    console.log("Value has changed");
-  }, [value]);
+import Header from "./components/Header";
+import Search from "./components/Search";
+import Posts from "./components/Posts";
 
-  return (
-    <p>
-      {value > 0 ? "Positive" : value < 0 ? "Negative" : "Zero"}
-    </p>
-  )
-}
+import "./index.css";
 
 // @Palta.component
 const App = () => {
-  const [count, setCount] = $state(0);
+  const [search, setSearch] = $state("");
+
 
   return (
-    <div>
-      <h1>Hello, world!</h1>
-      <p>Count: {count}</p>
-      <button
-        onClick={() => {
-          setCount((prev) => ++prev);
-        }}
-      >
-        Increment
-      </button>
-      <button
-        onClick={() => {
-          setCount((prev) => --prev);
-        }}
-      >
-        Decrement
-      </button>
-      <ValueInfo value={count} />
+    <div className="w-screen h-screen overflow-auto flex justify-center">
+      <div className="w-full max-w-5xl">
+        <Header />
+        <div className="w-full p-2 grow">
+          <Search onSearch={setSearch} />
+          <Posts search={search}/>
+        </div>
+      </div>
     </div>
   );
 };

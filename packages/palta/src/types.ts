@@ -6,24 +6,27 @@ export interface PaltaElement {
   [PaltaElementSymbol]: "tag" | "component" | "children" | "fragment";
   mount: (parent: HTMLElement, index: number) => void;
   unmount: () => void;
+  getHtmlElement: () => HTMLElement;
 }
 
 export interface PaltaTagElement<P = any> extends PaltaElement {
   [PaltaElementSymbol]: "tag";
+  initialize: (props: P) => void;
   updateProps: (props: P) => void;
   updateChild: (index: number, value: () => any) => void;
-};
+}
 
 export interface PaltaComponentElement<P = any> extends PaltaElement {
   [PaltaElementSymbol]: "component";
+  initialize: (props: P) => void;
   updateProps: (props: P) => void;
   updateChild: (index: number, value: () => any) => void;
-};
+}
 
 export interface PaltaChildrenElement extends PaltaElement {
   [PaltaElementSymbol]: "children";
   setValue: (value: PaltaNode[]) => void;
-};
+}
 
 export type PaltaComponent<P = {}> = (props: P) => PaltaElement;
 
@@ -404,7 +407,7 @@ namespace Palta {
   type HTMLElementTypedEvent<
     T extends NativeElement = NativeElement,
     E extends NativeEvent = NativeEvent
-  > = E & {
+  > = Omit<E, "target" | "currentTarget"> & {
     currentTarget: T;
     target: T;
   };
@@ -953,7 +956,6 @@ namespace Palta {
     type?: HTMLInputTypeAttribute | undefined;
     value?: string | readonly string[] | number | undefined;
     width?: number | string | undefined;
-    onChange?: EventHandler | undefined;
   };
 
   export type InsHTMLAttributes = HTMLAttributes & {
@@ -1212,7 +1214,7 @@ namespace Palta {
   export type HTMLElementProps<
     A = HTMLAttributes,
     E extends NativeElement = Element
-  > = AriaAttributes & { children: any | any[] } & DOMEventHandlers<E> & A;
+  > = AriaAttributes & { children?: any | any[] } & DOMEventHandlers<E> & A;
 
   export type SVGAttributes = {
     // Attributes which also defined in HTMLAttributes

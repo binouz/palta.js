@@ -9,15 +9,14 @@ import {
 import { EVENT_MAP, EVENT_NAME, EventName } from "./events";
 import { Scheduler } from "./scheduler";
 
-type PaltaComponentDefinition<T = any> = {
+type PaltaComponentDefinition<P = any> = {
   childrenElement: PaltaChildrenElement | null;
-  update: (props: T) => void;
+  initialize: (props: P) => void;
+  update: (props: P) => void;
   getRoot: () => PaltaElement;
 };
 
 type PaltaComponent<T = any> = () => PaltaComponentDefinition<T>;
-
-type ElementTag = keyof JSX.IntrinsicElements;
 
 const setHtmlElementProps = (element: HTMLElement, props: any) => {
   const boundEventListeners = new Map<EventName, EventListener>();
@@ -31,6 +30,9 @@ const setHtmlElementProps = (element: HTMLElement, props: any) => {
       )) {
         element.style[styleKey as any] = styleValue;
       }
+      continue;
+    } else if (key === "className") {
+      element.className = value;
       continue;
     }
 
@@ -58,9 +60,6 @@ const clearEventListeners = (
 
 const isPaltaElement = (node: PaltaNode): node is PaltaElement =>
   !!node && typeof node === "object" && PaltaElementSymbol in node;
-
-// const isChildrenElement = (node: PaltaNode): node is PaltaChildrenElement =>
-//   isPaltaElement(node) && node[PaltaElementSymbol] === "children";
 
 const isTagElement = (node: PaltaNode): node is PaltaTagElement =>
   isPaltaElement(node) && node[PaltaElementSymbol] === "tag";
@@ -149,14 +148,15 @@ namespace Palta {
   export type ComponentDefinition<T = any> = PaltaComponentDefinition<T>;
   export type Component<T = any> = PaltaComponent<T>;
 
-  export const createComponent = (
-    component: Component,
+  export const createComponent = <P extends any>(
+    component: Component<P>,
     children: Node[]
-  ): PaltaComponentElement => {
-    const { childrenElement, update, getRoot } = component();
+  ): PaltaComponentElement<P> => {
+    const { childrenElement, update, getRoot, initialize } = component();
 
     return {
       [PaltaElementSymbol]: "component",
+      initialize,
       mount: (parent, index) => {
         if (childrenElement) {
           childrenElement.setValue(children);
@@ -179,18 +179,25 @@ namespace Palta {
           root.updateChild(index, value);
         }
       },
-    } as PaltaComponentElement;
+      getHtmlElement: () => {
+        return getRoot().getHtmlElement();
+      },
+    } as PaltaComponentElement<P>;
   };
 
-  export const createElement = (
-    tag: ElementTag,
-    children: Node[]
-  ): PaltaTagElement => {
+  export const createElement = <Tag extends keyof HTMLElementTagNameMap>(
+    tag: Tag,
+    children: Node[],
+  ): PaltaTagElement<JSX.IntrinsicElements[Tag]> => {
     const element = document.createElement(tag);
     let boundEventListeners = new Map<EventName, EventListener>();
 
     return {
       [PaltaElementSymbol]: "tag",
+      initialize: (props) => {
+        clearEventListeners(element, boundEventListeners);
+        boundEventListeners = setHtmlElementProps(element, props);
+      },
       mount: (parent, index) => {
         const existingNode = parent.childNodes[index];
 
@@ -209,18 +216,22 @@ namespace Palta {
         unmountChildren(children);
         element.remove();
       },
-      updateProps: (props: any) => {
+      updateProps: (props) => {
         clearEventListeners(element, boundEventListeners);
         boundEventListeners = setHtmlElementProps(element, props);
       },
       updateChild: (index: number, value: () => PaltaNode) => {
         updateElementChild(element, index, value());
       },
+      getHtmlElement: () => {
+        return element;
+      },
     } as PaltaTagElement;
   };
 
   export const createChildren = (): PaltaChildrenElement => {
     let children: Node[] = [];
+    let _parent: HTMLElement;
 
     return {
       [PaltaElementSymbol]: "children",
@@ -232,6 +243,9 @@ namespace Palta {
       },
       setValue: (value: Node[]) => {
         children = value;
+      },
+      getHtmlElement: () => {
+        return _parent;
       },
     } as PaltaChildrenElement;
   };
@@ -251,6 +265,7 @@ namespace Palta {
     ) as PaltaComponentElement;
 
     instance.mount(root as HTMLElement, 0);
+    instance.initialize({});
     instance.updateProps({});
 
     Scheduler.get().start();
@@ -263,19 +278,20 @@ namespace Palta {
   export const runEffect = (
     effect: {
       deps: null | any[];
-      callback: () => void;
-      cleanup: (() => void) | null;
     },
+    callback: () => void,
+    cleanup: (() => void) | null,
     deps: any[]
   ) => {
-    const shouldRun = effect.deps === null || effect.deps.some((dep, i) => dep !== deps[i]);
+    const shouldRun =
+      effect.deps === null || effect.deps.some((dep, i) => dep !== deps[i]);
 
     if (shouldRun) {
-      if (effect.cleanup) {
-        effect.cleanup();
+      if (cleanup) {
+        cleanup();
       }
 
-      effect.callback();
+      callback();
     }
 
     effect.deps = deps;
@@ -294,3 +310,105 @@ export const $state = <T = any>(value: T): [T, Palta.StateUpdater<T>] => {
 };
 
 export const $effect = (_callback: () => void, _deps: any[]) => {};
+
+export const Children = (): JSX.Element => ({} as JSX.Element);
+
+export const For = <T extends any>(_: {
+  each: T[];
+  component: (props: T) => JSX.Element;
+  key: (value: T) => any;
+}): JSX.Element => {
+  let _parent: HTMLElement | null = null;
+  let _index: number = 0;
+  let _elements: Map<any, {
+    position: number;
+    paltaElement: PaltaComponentElement;
+    htmlElement: ChildNode;
+  }> = new Map();
+
+  const update = ({
+    each,
+    component,
+    key,
+  }: {
+    each: T[];
+    component: PaltaComponent<T>;
+    key: (value: T) => any;
+  }) => {
+    if (!each) {
+      return;
+    }
+
+    const updatedElements: Map<
+      any,
+      {
+        position: number;
+        paltaElement: PaltaComponentElement;
+        htmlElement: ChildNode;
+      }
+    > = new Map();
+
+    for (let i = 0; i < each.length; i++) {
+      const value = each[i];
+      const keyValue = key(value);
+      const isExisting = _elements.has(keyValue);
+      const instance: PaltaComponentElement = isExisting
+        ? _elements.get(keyValue)!.paltaElement
+        : Palta.createComponent(component, []);
+      let htmlElement: ChildNode;
+
+      if (isExisting) {
+        if (_elements.get(keyValue)!.position !== i) {
+          _parent!.insertBefore(_elements.get(keyValue)!.htmlElement, _parent!.childNodes[_index + i]);
+        }
+
+        htmlElement = _elements.get(keyValue)!.htmlElement;
+        instance.updateProps(value);
+      } else {
+        instance.mount(_parent!, _index + i);
+        instance.initialize(value);
+        htmlElement = instance.getHtmlElement();
+      }
+
+      updatedElements.set(keyValue, {
+        position: i,
+        paltaElement: instance,
+        htmlElement,
+      });
+    }
+
+    for (const key of Array.from(_elements.keys()).filter((key) => !updatedElements.has(key))) {
+      const elm = _elements.get(key)!
+      elm.paltaElement.unmount();
+    }
+
+    _elements = updatedElements;
+  };
+
+  const root = {
+    [PaltaElementSymbol]: "component",
+    initialize: update,
+    mount: (parent, index) => {
+      _parent = parent;
+      _index = index;
+      _elements = new Map();
+      return parent;
+    },
+    unmount: () => {
+      _elements.forEach((element) => element.paltaElement.unmount());
+      _elements.clear();
+    },
+    updateProps: update,
+    updateChild: () => {},
+    getHtmlElement: () => {
+      return _parent;
+    },
+  } as PaltaComponentElement;
+
+  return {
+    childrenElement: null,
+    initialize: update,
+    update,
+    getRoot: () => root,
+  } as unknown as JSX.Element;
+};

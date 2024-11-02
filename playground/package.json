@@ -10,10 +10,13 @@
   },
   "devDependencies": {
     "@swc/core": "^1.7.36",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
     "swc-plugin-palta": "file:../packages/swc-plugin-palta",
-    "vite-plugin-palta": "file:../packages/vite-plugin-palta",
+    "tailwindcss": "^3.4.14",
     "typescript": "^5.5.3",
-    "vite": "^5.4.8"
+    "vite": "^5.4.8",
+    "vite-plugin-palta": "file:../packages/vite-plugin-palta"
   },
   "dependencies": {
     "palta": "file:../packages/palta"

@@ -6,22 +6,33 @@ const Component = () => {
   let __$props = {};
   const __$effect$0 = {
     deps: null,
-    callback: () => {
-      console.log("Name has changed");
-    },
-    cleanup: null,
   };
   const __$update = ({ name }) => {
     __$props = { name };
     __$element$1.updateChild(1, () => {
       return name;
     });
-    Palta.runEffect(__$effect$0, [name]);
-  }
+    Palta.runEffect(
+      __$effect$0,
+      () => {
+        console.log("Name has changed");
+      },
+      null,
+      [name]
+    );
+  };
   let __$root = __$element$0;
 
   return {
     childrenElement: null,
+    initialize: ({ name }) => {
+      __$props = { name };
+      __$element$1.updateChild(1, () => {
+        return name;
+      });
+      __$element$1.initialize({});
+      __$element$0.initialize({});
+    },
     update: __$update,
     getRoot: () => __$root,
   };

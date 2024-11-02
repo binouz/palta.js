@@ -1,10 +1,10 @@
 // @Palta.component
-const Component = ({ name }) => {
+const Component = ({ name, className }) => {
   return (
     <div>
-      <h1 className="main">Hello, {name}!</h1>
+      <h1 className={className}>Hello, {name}!</h1>
     </div>
   );
-}
+};
 
 export default Component;
