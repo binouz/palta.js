@@ -1,5 +1,5 @@
 // @Palta.component
-const Component = ({ open }: { open: boolean }) => {
+const Component = ({ open }) => {
   return <div>{open ? <span>opened</span> : <span>closed</span>}</div>;
 };
 

@@ -1,8 +1,5 @@
 # Required
 
-- Support for inline components
-  -> Partially done for components in JSX expression
-  -> Still needed for props and variables
 - if statements in component body
 - HoC ?
 - Query library
@@ -13,6 +10,7 @@
 
 - fragment
 - Type error in playground when using vite-plugin-palta
+- State updated with previous value always has the initial value (closure issue)
 
 # Nice to have
 

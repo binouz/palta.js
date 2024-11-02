@@ -8,7 +8,7 @@ use swc_core::ecma::ast::{
     ExprStmt, Function, Ident, JSXAttrName, JSXAttrOrSpread, JSXAttrValue, JSXElement,
     JSXElementChild, JSXElementName, JSXExpr, JSXExprContainer, JSXFragment, JSXOpeningElement,
     JSXText, KeyValueProp, Lit, MemberExpr, ObjectLit, ParenExpr, Pat, Prop, PropName,
-    PropOrSpread, ReturnStmt, Stmt, TsTypeAnn, VarDeclarator,
+    PropOrSpread, ReturnStmt, Stmt, TsTypeAnn, VarDecl, VarDeclarator,
 };
 
 use crate::generators::{
@@ -256,76 +256,6 @@ pub struct Processor {
     effects: Vec<EffectDescriptor>,
 }
 
-fn get_element_props(element: &JSXOpeningElement) -> Option<ObjectLit> {
-    if element.attrs.is_empty() {
-        return None;
-    }
-
-    Some(ObjectLit {
-        span: element.span,
-        props: element
-            .attrs
-            .iter()
-            .map(|attr| match attr {
-                JSXAttrOrSpread::JSXAttr(attr) => {
-                    PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
-                        key: PropName::Ident(match &attr.name {
-                            JSXAttrName::Ident(ident) => ident.clone(),
-                            JSXAttrName::JSXNamespacedName(_) => {
-                                panic!("JSX Namespaced Name is not supported")
-                            }
-                        }),
-                        value: match attr.value.clone() {
-                            Some(value) => Box::new(match value {
-                                JSXAttrValue::Lit(lit) => Expr::Lit(lit.clone()),
-                                JSXAttrValue::JSXExprContainer(container) => {
-                                    jsx_expr_to_expr(&container.expr)
-                                }
-                                _ => panic!("JSX Attribute Value is not supported"), // TODO: SUpport jsxElement as prop
-                            }),
-                            None => Box::new(Expr::Lit(Lit::Bool(Bool {
-                                span: DUMMY_SP,
-                                value: true,
-                            }))),
-                        },
-                    })))
-                }
-                JSXAttrOrSpread::SpreadElement(spread) => PropOrSpread::Spread(spread.clone()),
-            })
-            .collect(),
-    })
-}
-
-fn get_element_descriptor(element: &JSXOpeningElement) -> ElementDescriptor {
-    match element.name.clone() {
-        JSXElementName::Ident(ident) if ident.sym == "Children" => ElementDescriptor::Children,
-        JSXElementName::Ident(ident) if HTML_ELEMENT_TAGS.contains(&ident.sym.as_str()) => {
-            ElementDescriptor::Tag(TagElementDescriptor {
-                tag: ident.sym.as_str().to_string(),
-                children: vec![],
-                props: get_element_props(element),
-            })
-        }
-        JSXElementName::Ident(ident) => ElementDescriptor::Component(ComponentElementDescriptor {
-            component: ComponentName::Identifier(ident.clone()),
-            children: vec![],
-            props: get_element_props(element),
-        }),
-        JSXElementName::JSXMemberExpr(member_expression) => {
-            ElementDescriptor::Component(ComponentElementDescriptor {
-                component: ComponentName::MemberExpression(jsx_member_expr_to_member_expr(
-                    &member_expression,
-                )),
-                children: vec![],
-                props: get_element_props(element),
-            })
-        }
-        JSXElementName::JSXNamespacedName(_) => {
-            panic!("JSX Namespaced Name is not supported");
-        }
-    }
-}
-
 fn is_palta_state_call(call_expression: &CallExpr) -> bool {
     if let Callee::Expr(callee) = &call_expression.callee {
         if let Expr::Ident(ident) = callee.deref() {
@@ -506,16 +436,7 @@ impl Processor {
 
     fn processs_declaration(&mut self, decl: &Decl) {
         match decl {
-            Decl::Var(var_decl) => {
-                for decl in &var_decl.decls {
-                    if !self.process_var_declarator(decl) {
-                        self.update_statements
-                            .push(Stmt::Decl(Decl::Var(var_decl.clone())));
-                        self.initialize_statements
-                            .push(Stmt::Decl(Decl::Var(var_decl.clone())));
-                    }
-                }
-            }
+            Decl::Var(var_decl) => self.process_var_declaration(var_decl),
             decl => {
                 self.update_statements.push(Stmt::Decl(decl.clone()));
                 self.initialize_statements.push(Stmt::Decl(decl.clone()));
@@ -523,21 +444,44 @@ impl Processor {
         }
     }
 
-    fn process_var_declarator(&mut self, decl: &VarDeclarator) -> bool {
-        if decl.init.is_none() {
-            return false;
-        }
+    fn process_var_declaration(&mut self, var_decl: &VarDecl) {
+        let mut new_var_decl = var_decl.clone();
 
-        let expr = decl.init.as_ref().unwrap();
+        new_var_decl.decls = vec![];
 
-        if let Expr::Call(call_expression) = expr.deref() {
-            if is_palta_state_call(&call_expression.clone()) {
-                self.process_palta_state_declaration(&decl.name, call_expression);
+        for decl in &var_decl.decls {
+            match &decl.init {
+                Some(init) => {
+                    if let Expr::Call(call_expression) = init.deref() {
+                        if is_palta_state_call(&call_expression.clone()) {
+                            self.process_palta_state_declaration(&decl.name, call_expression);
+                        }
+                    } else {
+                        let expr_elements = self.process_expression(init);
+
+                        new_var_decl.decls.push(VarDeclarator {
+                            span: decl.span,
+                            name: decl.name.clone(),
+                            init: Some(Box::new(replace_jsx_elements_in_expression(
+                                init,
+                                &mut VecDeque::from(expr_elements),
+                            ))),
+                            definite: decl.definite,
+                        });
+                    }
+                }
+                None => {
+                    new_var_decl.decls.push(decl.clone());
+                }
             }
-            return true;
         }
 
-        false
+        if !new_var_decl.decls.is_empty() {
+            self.update_statements
+                .push(Stmt::Decl(Decl::Var(Box::new(new_var_decl.clone()))));
+            self.initialize_statements
+                .push(Stmt::Decl(Decl::Var(Box::new(new_var_decl.clone()))));
+        }
     }
 
     fn process_palta_state_declaration(&mut self, name: &Pat, call_expression: &CallExpr) {
@@ -634,7 +578,7 @@ impl Processor {
     }
 
     fn process_jsx_element(&mut self, element: &JSXElement) -> Vec<ElementChildren> {
-        let element_descriptor = get_element_descriptor(&element.opening);
+        let element_descriptor = self.get_element_descriptor(&element.opening);
 
         if let ElementDescriptor::Children = element_descriptor {
             if self.children_element.is_some() {
@@ -694,13 +638,8 @@ impl Processor {
         if let Some(parent) = parent {
             let update_expression = match &expression.expr {
                 JSXExpr::Expr(expr) => {
-                    let expr_elements = self.process_expression(expr.deref());
-
-                    if !expr_elements.is_empty() {
-                        replace_jsx_elements_in_expression(expr, &mut VecDeque::from(expr_elements))
-                    } else {
-                        expr.deref().clone()
-                    }
+                    let expr_elements = self.process_expression(expr);
+                    replace_jsx_elements_in_expression(expr, &mut VecDeque::from(expr_elements))
                 }
                 expr => jsx_expr_to_expr(expr),
             };
@@ -757,5 +696,86 @@ impl Processor {
     fn add_initialize_statement(&mut self, position: usize, props: &Option<ObjectLit>) {
         self.initialize_statements
             .push(generate_element_initialize_call(position, props));
+    }
+
+    fn get_element_descriptor(&mut self, element: &JSXOpeningElement) -> ElementDescriptor {
+        match element.name.clone() {
+            JSXElementName::Ident(ident) if ident.sym == "Children" => ElementDescriptor::Children,
+            JSXElementName::Ident(ident) if HTML_ELEMENT_TAGS.contains(&ident.sym.as_str()) => {
+                ElementDescriptor::Tag(TagElementDescriptor {
+                    tag: ident.sym.as_str().to_string(),
+                    children: vec![],
+                    props: self.get_element_props(element),
+                })
+            }
+            JSXElementName::Ident(ident) => {
+                ElementDescriptor::Component(ComponentElementDescriptor {
+                    component: ComponentName::Identifier(ident.clone()),
+                    children: vec![],
+                    props: self.get_element_props(element),
+                })
+            }
+            JSXElementName::JSXMemberExpr(member_expression) => {
+                ElementDescriptor::Component(ComponentElementDescriptor {
+                    component: ComponentName::MemberExpression(jsx_member_expr_to_member_expr(
+                        &member_expression,
+                    )),
+                    children: vec![],
+                    props: self.get_element_props(element),
+                })
+            }
+            JSXElementName::JSXNamespacedName(_) => {
+                panic!("JSX Namespaced Name is not supported");
+            }
+        }
+    }
+
+    fn get_element_props(&mut self, element: &JSXOpeningElement) -> Option<ObjectLit> {
+        if element.attrs.is_empty() {
+            return None;
+        }
+
+        Some(ObjectLit {
+            span: element.span,
+            props: element
+                .attrs
+                .iter()
+                .map(|attr| match attr {
+                    JSXAttrOrSpread::JSXAttr(attr) => {
+                        PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                            key: PropName::Ident(match &attr.name {
+                                JSXAttrName::Ident(ident) => ident.clone(),
+                                JSXAttrName::JSXNamespacedName(_) => {
+                                    panic!("JSX Namespaced Name is not supported")
+                                }
+                            }),
+                            value: match attr.value.clone() {
+                                Some(value) => Box::new(match value {
+                                    JSXAttrValue::Lit(lit) => Expr::Lit(lit.clone()),
+                                    JSXAttrValue::JSXExprContainer(container) => {
+                                        match &container.expr {
+                                            JSXExpr::Expr(expr) => {
+                                                let expr_elements = self.process_expression(expr);
+                                                replace_jsx_elements_in_expression(
+                                                    expr,
+                                                    &mut VecDeque::from(expr_elements),
+                                                )
+                                            }
+                                            _ => jsx_expr_to_expr(&container.expr),
+                                        }
+                                    }
+                                    _ => panic!("JSX Attribute Value is not supported"), // TODO: SUpport jsxElement as prop
+                                }),
+                                None => Box::new(Expr::Lit(Lit::Bool(Bool {
+                                    span: DUMMY_SP,
+                                    value: true,
+                                }))),
+                            },
+                        })))
+                    }
+                    JSXAttrOrSpread::SpreadElement(spread) => PropOrSpread::Spread(spread.clone()),
+                })
+                .collect(),
+        })
     }
 }
