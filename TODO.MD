@@ -1,14 +1,16 @@
 # Required
 
+- fragment
 - if statements in component body
 - HoC ?
+- portals
 - Query library
 - Routing
 - Shared state management
 
 # Issues
 
-- fragment
+- Component without root element
 - Type error in playground when using vite-plugin-palta
 - State updated with previous value always has the initial value (closure issue)
 

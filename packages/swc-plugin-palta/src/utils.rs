@@ -5,9 +5,9 @@ use swc_core::atoms::Atom;
 use swc_core::common::DUMMY_SP;
 use swc_core::ecma::ast::{
     ArrayLit, AssignExpr, AssignOp, AssignTarget, AssignTargetPat, BinExpr, CondExpr, Expr,
-    ExprOrSpread, Ident, IdentName, Invalid, JSXExpr, JSXMemberExpr, JSXObject, KeyValueProp, Lit,
-    MemberExpr, MemberProp, ObjectLit, ObjectPatProp, Pat, Prop, PropName, PropOrSpread,
-    SimpleAssignTarget, SpreadElement, Str,
+    ExprOrSpread, Ident, IdentName, Invalid, JSXElementChild, JSXExpr, JSXMemberExpr, JSXObject,
+    KeyValueProp, Lit, MemberExpr, MemberProp, ObjectLit, ObjectPatProp, Pat, Prop, PropName,
+    PropOrSpread, SimpleAssignTarget, SpreadElement, Str,
 };
 
 use crate::processor::ElementChildren;
@@ -104,29 +104,80 @@ pub fn pat_to_expr(pat: &Pat) -> Expr {
     }
 }
 
+fn get_next_element_variable(elements: &mut VecDeque<ElementChildren>) -> Expr {
+    match elements.pop_front() {
+        Some(element) => match element {
+            ElementChildren::Text(text) => Expr::Lit(Lit::Str(Str {
+                span: DUMMY_SP,
+                value: text.into(),
+                raw: None,
+            })),
+            ElementChildren::Element(position) => Expr::Ident(Ident {
+                sym: format!("__$element${}", position).into(),
+                ..Ident::default()
+            }),
+        },
+        None => Expr::Invalid(Invalid { span: DUMMY_SP }),
+    }
+}
+
+fn replace_jsx_elements_in_jsx_element_child(
+    child: &JSXElementChild,
+    elements: &mut VecDeque<ElementChildren>,
+) -> Option<ExprOrSpread> {
+    match child {
+        JSXElementChild::JSXText(value) => Some(ExprOrSpread {
+            spread: None,
+            expr: Box::new(Expr::Lit(Lit::Str(Str {
+                span: value.span,
+                value: value.value.clone(),
+                raw: Some(value.raw.clone()),
+            }))),
+        }),
+        JSXElementChild::JSXExprContainer(jsx_expr) => match &jsx_expr.expr {
+            JSXExpr::Expr(expr) => Some(ExprOrSpread {
+                spread: None,
+                expr: Box::new(replace_jsx_elements_in_expression(expr, elements)),
+            }),
+            JSXExpr::JSXEmptyExpr(_) => None,
+        },
+        JSXElementChild::JSXSpreadChild(spread_child) => Some(ExprOrSpread {
+            spread: None,
+            expr: spread_child.expr.clone(),
+        }),
+        JSXElementChild::JSXElement(_) => Some(ExprOrSpread {
+            spread: None,
+            expr: Box::new(get_next_element_variable(elements)),
+        }),
+        JSXElementChild::JSXFragment(fragment) => Some(ExprOrSpread {
+            spread: None,
+            expr: Box::new(Expr::Array(ArrayLit {
+                elems: fragment
+                    .children
+                    .iter()
+                    .map(|child| replace_jsx_elements_in_jsx_element_child(child, elements))
+                    .collect(),
+                ..ArrayLit::default()
+            })),
+        }),
+    }
+}
+
 pub fn replace_jsx_elements_in_expression(
     expr: &Expr,
     elements: &mut VecDeque<ElementChildren>,
 ) -> Expr {
     match expr {
         Expr::Paren(paren_expr) => replace_jsx_elements_in_expression(&paren_expr.expr, elements),
-        Expr::JSXElement(_) => match elements.pop_front() {
-            Some(element) => match element {
-                ElementChildren::Text(text) => Expr::Lit(Lit::Str(Str {
-                    span: DUMMY_SP,
-                    value: text.into(),
-                    raw: None,
-                })),
-                ElementChildren::Element(position) => Expr::Ident(Ident {
-                    sym: format!("__$element${}", position).into(),
-                    ..Ident::default()
-                }),
-            },
-            None => Expr::Invalid(Invalid { span: DUMMY_SP }),
-        },
-        Expr::JSXFragment(_) => {
-            panic!("Implement JSX fragment in expression")
-        }
+        Expr::JSXElement(_) => get_next_element_variable(elements),
+        Expr::JSXFragment(fragment) => Expr::Array(ArrayLit {
+            elems: fragment
+                .children
+                .iter()
+                .map(|child| replace_jsx_elements_in_jsx_element_child(child, elements))
+                .collect(),
+            ..ArrayLit::default()
+        }),
         Expr::Bin(bin_expr) => Expr::Bin(BinExpr {
             span: bin_expr.span,
             op: bin_expr.op,

@@ -1,4 +1,4 @@
-import { EventName as EventNameDef } from "./types";
+import { EventName as EventNameDef } from "./runtime";
 
 export type EventName = EventNameDef;
 
