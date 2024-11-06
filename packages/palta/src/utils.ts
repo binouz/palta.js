@@ -45,3 +45,13 @@ export const getHtmlNodeGroupChildFromPaltaNode = (
 
   return null;
 };
+
+export const unmountPaltaNode = (node: PaltaNode) => {
+  if (isPaltaElement(node)) {
+    node.unmount();
+  } else if (isIterable(node)) {
+    for (const child of node) {
+      unmountPaltaNode(child);
+    }
+  }
+};

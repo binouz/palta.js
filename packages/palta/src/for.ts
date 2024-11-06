@@ -9,7 +9,7 @@ import {
 
 type ForProps<T extends any, K extends any> = {
   each: T[];
-  component: PaltaComponent<T>;
+  component: (props: T) => JSX.Element;
   key: (value: T) => K;
 };
 

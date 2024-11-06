@@ -93,3 +93,5 @@ export const $effect = (_callback: () => void, _deps: any[]) => {};
 export const Children = (): JSX.Element => ({} as JSX.Element);
 
 export const For = _For;
+
+export type * from "./runtime";

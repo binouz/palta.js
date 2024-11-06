@@ -33,6 +33,11 @@ const palta = (): Plugin => {
           experimental: {
             plugins: [["swc-plugin-palta", {}]],
           },
+          transform: {
+            react: {
+              pragma: "UnevaluatedJSXElement",
+            },
+          },
         },
       });
 

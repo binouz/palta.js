@@ -49,9 +49,7 @@ class HtmlNodeGroup {
     }
 
     for (const child of node) {
-      if (node) {
-        appendNode(this._parent, child);
-      }
+      appendNode(this._parent, child);
     }
   }
 
@@ -68,15 +66,15 @@ class HtmlNodeGroup {
     }
   }
 
-  replaceChild(index: number, node: HtmlNodeGroupChild) {
+  replaceChild(index: number, newNode: HtmlNodeGroupChild) {
     const oldNode =
       index < this._children.length ? this._children[index] : null;
 
-    if (oldNode === node) {
+    if (oldNode === newNode) {
       return;
     }
 
-    this._children[index] = node;
+    this._children[index] = newNode;
 
     if (!this._parent) {
       return;
@@ -86,7 +84,7 @@ class HtmlNodeGroup {
       removeNode(oldNode);
     }
 
-    appendNode(this._parent, node);
+    appendNode(this._parent, newNode);
   }
 
   clear() {

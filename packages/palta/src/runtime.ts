@@ -1,6 +1,6 @@
 import type * as CSS from "csstype";
 
-import { PaltaElement, PaltaNode } from "./types";
+import { PaltaElement } from "./types";
 
 type Booleanish = boolean | "true" | "false";
 

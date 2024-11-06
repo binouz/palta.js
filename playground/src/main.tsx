@@ -10,7 +10,6 @@ import "./index.css";
 const App = () => {
   const [search, setSearch] = $state("");
 
-
   return (
     <div className="w-screen h-screen overflow-auto flex justify-center">
       <div className="w-full max-w-5xl">

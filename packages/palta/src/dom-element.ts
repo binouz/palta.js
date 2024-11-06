@@ -1,6 +1,6 @@
 import { PaltaElementSymbol, PaltaTagElement, PaltaNode } from "./types";
 import { EVENT_MAP, EVENT_NAME, EventName } from "./events";
-import { getHtmlNodeGroupChildFromPaltaNode, isPaltaElement } from "./utils";
+import { getHtmlNodeGroupChildFromPaltaNode, unmountPaltaNode } from "./utils";
 import HtmlNodeGroup from "./HtmlElementGroup";
 
 class DomElement<Tag extends keyof HTMLElementTagNameMap>
@@ -23,10 +23,10 @@ class DomElement<Tag extends keyof HTMLElementTagNameMap>
   initialize(props: JSX.IntrinsicElements[Tag]) {
     this.clearEventListeners();
     this.setHtmlElementProps(props);
+    this._nodeGroup.appendToParent(this._htmlElement);
   }
 
   mount() {
-    this._nodeGroup.appendToParent(this._htmlElement);
     this._nodeGroup.push(
       ...this._children.map(getHtmlNodeGroupChildFromPaltaNode)
     );
@@ -34,14 +34,11 @@ class DomElement<Tag extends keyof HTMLElementTagNameMap>
   }
 
   unmount() {
-    this.clearEventListeners();
-    this._nodeGroup.clear();
-
     for (const child of this._children) {
-      if (isPaltaElement(child)) {
-        child.unmount();
-      }
+      unmountPaltaNode(child);
     }
+
+    this._nodeGroup.clear();
   }
 
   updateProps(props: JSX.IntrinsicElements[Tag]) {
@@ -57,9 +54,7 @@ class DomElement<Tag extends keyof HTMLElementTagNameMap>
         return;
       }
 
-      if (isPaltaElement(this._children[index])) {
-        this._children[index].unmount();
-      }
+      unmountPaltaNode(this._children[index]);
     }
 
     this._children[index] = node;

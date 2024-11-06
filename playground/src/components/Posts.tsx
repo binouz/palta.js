@@ -151,13 +151,16 @@ export default function Posts({ search }: { search: string }) {
   }, [search]);
 
   return (
-    <div className="flex flex-col gap-2">
-      <h2 className="text-xl font-semibold">Posts</h2>
-      {isLoading ? (
-        <p>Loading...</p>
-      ) : (
-        <For each={posts} component={Post} key={(p) => p.id} />
-      )}
-    </div>
+      <div className="flex flex-col gap-2">
+        <h2 className="text-xl font-semibold">Posts</h2>
+        {isLoading ? (
+          <>
+            <p>Loading...</p>
+            <hr />
+          </>
+        ) : (
+          <For each={posts} component={Post} key={(p) => p.id} />
+        )}
+      </div>
   );
 }
