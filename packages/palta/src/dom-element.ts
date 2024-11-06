@@ -1,7 +1,7 @@
 import { PaltaElementSymbol, PaltaTagElement, PaltaNode } from "./types";
 import { EVENT_MAP, EVENT_NAME, EventName } from "./events";
 import { getHtmlNodeGroupChildFromPaltaNode, unmountPaltaNode } from "./utils";
-import HtmlNodeGroup from "./HtmlElementGroup";
+import HtmlNodeGroup from "./HtmlNodeGroup";
 
 class DomElement<Tag extends keyof HTMLElementTagNameMap>
   implements PaltaTagElement<JSX.IntrinsicElements[Tag]>

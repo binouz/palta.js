@@ -1,5 +1,5 @@
 import { createComponent } from "./component";
-import HtmlNodeGroup, { HtmlNodeGroupChild } from "./HtmlElementGroup";
+import HtmlNodeGroup, { HtmlNodeGroupChild } from "./HtmlNodeGroup";
 import {
   PaltaBuiltinComponent,
   PaltaComponent,

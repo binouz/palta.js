@@ -12,7 +12,7 @@ import { createChildren as _createChildren } from "./children";
 import { For as _For } from "./for";
 
 import { Scheduler } from "./scheduler";
-import HtmlNodeGroup from "./HtmlElementGroup";
+import HtmlNodeGroup from "./HtmlNodeGroup";
 
 namespace Palta {
   export type Element = PaltaElement;

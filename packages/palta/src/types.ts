@@ -1,4 +1,4 @@
-import { HtmlNodeGroupChild } from "./HtmlElementGroup";
+import { HtmlNodeGroupChild } from "./HtmlNodeGroup";
 
 export const PaltaElementSymbol = Symbol();
 

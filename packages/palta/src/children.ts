@@ -1,4 +1,4 @@
-import HtmlNodeGroup from "./HtmlElementGroup";
+import HtmlNodeGroup from "./HtmlNodeGroup";
 import { PaltaChildrenElement, PaltaElementSymbol, PaltaNode } from "./types";
 import { getHtmlNodeGroupChildFromPaltaNode, isPaltaElement } from "./utils";
 

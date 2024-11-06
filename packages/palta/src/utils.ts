@@ -1,4 +1,4 @@
-import HtmlNodeGroup, { HtmlNodeGroupChild } from "./HtmlElementGroup";
+import HtmlNodeGroup, { HtmlNodeGroupChild } from "./HtmlNodeGroup";
 import {
   PaltaElementSymbol,
   PaltaNode,

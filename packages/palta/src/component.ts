@@ -9,7 +9,7 @@ import {
   PaltaBuiltinComponent,
 } from "./types";
 import { isBuiltinComponent } from "./utils";
-import HtmlNodeGroup from "./HtmlElementGroup";
+import HtmlNodeGroup from "./HtmlNodeGroup";
 
 class Component<P extends any> implements PaltaComponentElement<P> {
   [PaltaElementSymbol]: "component" = "component";
